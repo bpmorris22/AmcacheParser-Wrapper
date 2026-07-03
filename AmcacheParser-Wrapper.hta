@@ -1,0 +1,1694 @@
+<!doctype html>
+<html>
+<head>
+<meta http-equiv="x-ua-compatible" content="IE=edge">
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<title>AmcacheParser Wrapper</title>
+<HTA:APPLICATION
+  ID="amcacheHta"
+  APPLICATIONNAME="AmcacheParser Wrapper"
+  BORDER="thick"
+  CAPTION="yes"
+  SCROLL="auto"
+  SINGLEINSTANCE="yes"
+  SHOWINTASKBAR="yes"
+  MAXIMIZEBUTTON="yes"
+  MINIMIZEBUTTON="yes"
+  INNERBORDER="no"
+  CONTEXTMENU="yes"
+  SELECTION="yes" />
+<!--
+  AmcacheParser CSV contract, VERIFIED 2026-07-03 against AmcacheParser 1.5.1.0 on a real case hive (new format):
+
+  One run produces EIGHT CSVs, all sharing one timestamp prefix <ts>_Amcache_*.csv:
+    UnassociatedFileEntries / AssociatedFileEntries (only with -i)  — identical header, the primary dataset:
+      ApplicationName,ProgramId,FileKeyLastWriteTimestamp,SHA1,IsOsComponent,FullPath,Name,FileExtension,
+      LinkDate,ProductName,Size,Version,ProductVersion,LongPathHash,BinaryType,IsPeFile,BinFileVersion,
+      BinProductVersion,Usn,Language,Description
+    ProgramEntries:
+      ProgramId,KeyLastWriteTimestamp,Name,Version,Publisher,InstallDateArpLastModified,InstallDate,InstallDateMsi,
+      OSVersionAtInstallTime,InstallDateFromLinkFile,BundleManifestPath,HiddenArp,InboxModernApp,Language,ManifestPath,
+      MsiPackageCode,MsiProductCode,PackageFullName,ProgramInstanceId,RegistryKeyPath,RootDirPath,Type,Source,
+      StoreAppType,UninstallString,Manufacturer
+    DriveBinaries:
+      KeyName,KeyLastWriteTimestamp,DriverTimeStamp,DriverLastWriteTime,DriverName,DriverInBox,DriverIsKernelMode,
+      DriverSigned,DriverCheckSum,DriverCompany,DriverId,DriverPackageStrongName,DriverType,DriverVersion,ImageSize,
+      Inf,Product,ProductVersion,Service,WdfVersion
+    ShortCuts: KeyName,LnkName,KeyLastWriteTimestamp
+    DevicePnps / DeviceContainers / DriverPackages: generic-grid only.
+
+  - All timestamps UTC "yyyy-MM-dd HH:mm:ss". SHA1 covers only the first 30 MB of the file.
+  - FileKeyLastWriteTimestamp ~= when the binary was first seen/scanned; Amcache presence != execution.
+  - AmcacheParser is -f single-hive only (no -d). The LIVE hive (C:\Windows\appcompat\Programs\Amcache.hve)
+    is locked; parse a collected copy, or snapshot it with: esentutl.exe /y <src> /vss /d <dst>  (elevated).
+  - Transaction logs (.LOG1/.LOG2) beside the hive are replayed automatically IN MEMORY — the source hive is
+    not modified (verified). Keep the LOGs next to the hive; --nl skips replay if the LOGs are corrupt.
+  - EZ tools need a real console (net4 builds crash at Console.WindowWidth without one) → always run via cmd window.
+-->
+<style>
+  html{margin:0;height:100%;background:#0d1117}
+  body{margin:0;height:100%;background:#0d1117;color:#e6edf3;font-family:Segoe UI,Tahoma,sans-serif;font-size:16px;zoom:0.9}
+  a{color:#58a6ff}
+  .mono{font-family:Consolas,"Courier New",monospace}
+  .muted{color:#8b949e}
+  .err{color:#f85149}
+  .ok{color:#3fb950}
+  header{padding:8px 14px;background:#161b22;border-bottom:1px solid #30363d}
+  header h1{display:inline-block;font-size:15px;margin:0;font-weight:600;vertical-align:middle}
+  header h1 small{color:#8b949e;font-weight:400}
+  .pill{display:inline-block;font-size:11px;color:#8b949e;border:1px solid #30363d;border-radius:20px;padding:2px 10px;margin-left:8px;vertical-align:middle}
+  .wrap{padding:12px 14px}
+  .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:12px}
+  .card h3{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#8b949e}
+  label.fld{display:block;margin:6px 0 2px;font-size:11px;color:#8b949e}
+  input.txt,select,textarea{background:#1c2330;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:5px 8px;font-size:13px;font-family:Consolas,monospace}
+  input.wide{width:62%}
+  .btn{background:#1c2330;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:6px 12px;font-size:13px;cursor:pointer;margin:2px}
+  .btn:hover{border-color:#58a6ff}
+  .btn.primary{background:#1f6feb;border-color:#1f6feb}
+  .btn.on{background:#1f6feb;border-color:#1f6feb;color:#fff}
+  .row{white-space:nowrap}
+  .stat{display:inline-block;background:#1c2330;border:1px solid #30363d;border-radius:8px;padding:6px 12px;margin:0 6px 6px 0;min-width:70px;vertical-align:top}
+  .stat .n{font-size:17px;font-weight:700;display:block}
+  .stat .l{font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px}
+  .cards3{width:100%}
+  .col3{display:inline-block;width:32%;vertical-align:top;margin-right:1%}
+  .brow{white-space:nowrap;margin:3px 0}
+  .blab{display:inline-block;width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;font-family:Consolas,monospace;font-size:11px}
+  .blab.lnk{cursor:pointer;color:#58a6ff}
+  .blab.lnk:hover{text-decoration:underline}
+  .btrack{display:inline-block;width:32%;height:12px;background:#1c2330;border-radius:3px;overflow:hidden;vertical-align:middle}
+  .bfill{display:block;height:100%;background:#1f6feb}
+  .bval{display:inline-block;width:18%;text-align:right;font-size:11px;color:#8b949e;vertical-align:middle}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:4px 7px;border-bottom:1px solid #30363d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  th{background:#1c2330;cursor:pointer;color:#c9d1d9;position:relative;z-index:3;box-shadow:0 1px 0 #30363d}
+  th:hover{color:#58a6ff}
+  td{max-width:360px}
+  tr.sus td{background:#2a1416}
+  tr.sus td.first{border-left:3px solid #ff6b6b}
+  tr.sel td{background:#1c2f4a}
+  .scroll{max-height:52vh;overflow:auto;border:1px solid #30363d;border-radius:8px}
+  .tag{display:inline-block;font-size:10px;padding:1px 6px;border-radius:10px;font-weight:600;margin-right:3px}
+  .tag.sus{background:#3a1416;color:#ff6b6b}
+  .tag.usr{background:#3a2d10;color:#d29922}
+  .tag.lol{background:#10263f;color:#58a6ff}
+  .tag.rare{background:#241a3a;color:#b083f0}
+  .tag.ioc{background:#3a1416;color:#ff6b6b;border:1px solid #ff6b6b}
+  .tag.gen{background:#21262d;color:#8b949e}
+  .dl{font-family:Consolas,"Courier New",monospace;font-size:11px;max-height:210px;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:6px;margin:4px 0;white-space:nowrap}
+  .dl div{overflow:hidden;text-overflow:ellipsis}
+  .hl-user{color:#d29922}
+  .hl-ioc{color:#ff6b6b;font-weight:700}
+  #log{white-space:pre-wrap;font-family:Consolas,monospace;font-size:11px;color:#8b949e;max-height:140px;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;display:none;margin-top:8px}
+  .hide{display:none}
+  .lnk{cursor:pointer;color:#58a6ff}
+  .lnk:hover{text-decoration:underline}
+  .sep{display:inline-block;width:1px;height:18px;background:#30363d;margin:0 6px;vertical-align:middle}
+</style>
+</head>
+<body>
+<header>
+  <h1>AmcacheParser Wrapper <small>&mdash; DFIR Amcache triage <span id="appver"></span></small></h1>
+  <span class="pill" id="verpill">version: checking&hellip;</span>
+  <span class="pill" id="srcpill">no data loaded</span>
+  <span style="float:right">
+    <button class="btn" id="fdown" title="Smaller text">A&minus;</button>
+    <button class="btn" id="fup" title="Larger text">A+</button>
+  </span>
+</header>
+
+<div class="wrap">
+
+  <!-- CONTROL PANEL -->
+  <div class="card">
+    <h3>AmcacheParser control panel</h3>
+    <div class="muted" id="exeline" style="font-size:11px;margin-bottom:6px"></div>
+    <label class="fld">Amcache hive to process &mdash; an Amcache.hve, or a collection folder to search recursively (keep .LOG1/.LOG2 beside the hive for transaction-log replay)
+      &nbsp;<label style="font-size:12px" title="-i: also export file entries that are associated with a program entry (the AssociatedFileEntries CSV). Without it only unassociated entries are written. Leave on — the analysis view uses both.">
+        <input type="checkbox" id="optInc" checked> include associated entries</label>
+      &nbsp;<label style="font-size:12px" title="--nl: do NOT replay the Amcache.hve.LOG1/.LOG2 transaction logs. Replay is in-memory and evidence-safe; only skip it when replay fails on corrupt/mismatched LOG files.">
+        <input type="checkbox" id="optNl"> skip log replay</label>
+    </label>
+    <input class="txt wide" id="pfPath" value="">
+    <input type="file" id="pfPick" style="display:none">
+    <button class="btn" id="browseBtn">Browse file&hellip;</button>
+    <button class="btn" id="browseDirBtn" title="Pick a collection folder — it is searched recursively for Amcache.hve (KAPE / Velociraptor trees work as-is).">Browse folder&hellip;</button>
+    <button class="btn" id="liveBtn" title="Copy this machine's LIVE Amcache hive (locked while Windows runs) plus its transaction logs with esentutl /vss into a LiveSnapshot folder next to this app, then set the copy as the input. Requires an ELEVATED run.">Snapshot live Amcache</button>
+    <div style="margin-top:6px" id="hiveRow" class="hide">
+      <label class="fld">Multiple Amcache hives found &mdash; pick one</label>
+      <select id="hiveSel" style="min-width:70%"></select>
+      <button class="btn primary" id="useHiveBtn">Use selected &rarr; process</button>
+    </div>
+    <label class="fld">CSV output directory</label>
+    <input class="txt wide" id="outDir" value="">
+    <button class="btn" id="openDirBtn">Open folder</button>
+    <div style="margin-top:10px">
+      <button class="btn" id="verBtn">Check version</button>
+      <button class="btn" id="updBtn">Update / download AmcacheParser</button>
+      <span class="sep"></span>
+      <button class="btn primary" id="procBtn">Process &rarr; analyze</button>
+      <button class="btn" id="loadBtn">Load existing CSV&hellip;</button>
+      <input type="file" id="csvPick" style="display:none">
+      <span class="sep"></span>
+      <button class="btn" id="logToggle">Show log</button>
+      <span class="muted" id="status" style="margin-left:8px"></span>
+    </div>
+    <div style="margin-top:8px" id="producedRow" class="hide">
+      <label class="fld">Produced CSVs &mdash; pick one to view</label>
+      <select id="producedSel" style="min-width:70%"></select>
+      <button class="btn" id="loadSelBtn">Load selected</button>
+    </div>
+    <div id="log"></div>
+  </div>
+
+  <!-- RESULTS -->
+  <div id="results" class="hide">
+    <div class="card">
+      <h3 id="ovTitle">Overview</h3>
+      <div id="statbar"></div>
+    </div>
+
+    <div class="card cards3 hide" id="pfCards">
+      <div class="col3"><h3>Newest first-seen (FileKeyLastWrite)</h3><div id="topNew"></div></div>
+      <div class="col3"><h3>Top publisher / product</h3><div id="topPubs"></div></div>
+      <div class="col3"><h3>Suspicious entries</h3><div id="topSus"></div></div>
+    </div>
+
+    <div class="card">
+      <h3 id="tableTitle">Records</h3>
+      <div class="row hide" style="margin-bottom:8px" id="viewToggle">
+        <button class="btn on" id="vFiles" title="One row per Amcache file entry (Unassociated + Associated merged)">File entries</button>
+        <button class="btn" id="vProgs" title="One row per installed-program entry (ProgramEntries)">Programs</button>
+        <button class="btn" id="vDrv" title="One row per driver binary (DriveBinaries) — unsigned kernel-mode drivers sort first">Drivers</button>
+      </div>
+      <div class="row hide" style="margin-bottom:8px" id="pfCats">
+        <button class="btn on" data-cat="all">All</button>
+        <button class="btn" data-cat="sus">Suspicious</button>
+        <button class="btn" data-cat="userpath">User-path</button>
+        <button class="btn" data-cat="lolbin">LOLBIN</button>
+        <button class="btn" data-cat="recent">Recent</button>
+        <button class="btn" data-cat="nometa">No-metadata PE</button>
+        <button class="btn" data-cat="unsigned">Unsigned drivers</button>
+        <button class="btn" data-cat="ioc">IOC hits</button>
+      </div>
+      <div class="row" style="margin-bottom:8px">
+        <input class="txt" id="q" placeholder="search name, path, hash, product, publisher&hellip;" style="width:280px">
+        <span id="srcWrap" class="hide"><span class="sep"></span><label class="muted" style="font-size:12px">source:</label>
+          <select id="srcSel" title="Filter by source file."><option value="">all source files</option></select></span>
+        <span id="pfDateCtl" class="hide">
+          <span class="sep"></span>
+          <input class="txt mono" id="dfrom" placeholder="from YYYY-MM-DD" style="width:140px" title="Filter by first-seen / installed / driver-write date, per view (UTC)">
+          <span class="muted">&rarr;</span>
+          <input class="txt mono" id="dto" placeholder="to YYYY-MM-DD" style="width:140px" title="Filter by first-seen / installed / driver-write date, per view (UTC)">
+        </span>
+        <span class="sep"></span>
+        <button class="btn" id="iocBtn">IOC / keywords&hellip;</button>
+        <button class="btn" id="clearBtn">clear</button>
+        <button class="btn" id="exportBtn">Export view &rarr; CSV</button>
+        <button class="btn" id="copyBtn">Copy for case notes</button>
+        <span class="muted" id="count" style="margin-left:8px"></span>
+      </div>
+      <div id="iocWrap" class="hide" style="margin-bottom:8px">
+        <label class="fld">IOC / keyword list — comma or newline separated. 40-hex tokens are treated as SHA1 hashes (exact match against each entry's SHA1); everything else is a case-insensitive substring matched against name, path, product, publisher, program and ProgramId. Matches score +3. NB: Amcache SHA1 covers only the first 30 MB of a file.</label>
+        <textarea id="iocBox" rows="3" style="width:70%;vertical-align:top"></textarea>
+        <button class="btn" id="iocApply">Apply</button>
+        <button class="btn" id="iocLoad">Load file&hellip;</button>
+        <input type="file" id="iocPick" style="display:none">
+        <span class="muted" id="iocInfo" style="font-size:11px"></span>
+      </div>
+      <div class="scroll" id="tblScroll"><table id="tbl"></table></div>
+      <div class="muted" id="pfFoot" style="font-size:11px;margin-top:6px">All timestamps UTC. Suspicious rows are shaded (file entries: score &ge; 3 — combinations like user-path + LOLBIN, masquerade, IOC; programs &ge; 2; unsigned kernel drivers flag directly). <b>Amcache presence &ne; execution</b> — entries are written by the compatibility scanner and can exist for binaries that never ran (and recent activity may be missing if the scanner hasn't run); corroborate with prefetch / SRUM. Click a row for full detail incl. copyable SHA1. Max 6000 rows shown; export writes the full filtered set.</div>
+    </div>
+
+    <div class="card hide" id="detailCard">
+      <h3>Record detail <span class="lnk" id="detCopy" style="float:right;margin-left:12px">copy record</span><span class="lnk" id="detClose" style="float:right">close &times;</span></h3>
+      <div id="detBody"></div>
+    </div>
+  </div>
+
+</div>
+
+<script language="JScript">
+"use strict";
+
+var APP_VERSION = "1.0.0";
+var KNOWN_LATEST_AMCP = "2026.5.0";                                            // baseline as of 2026-07-03 (live scrape verified)
+var AMCP_ZIP_URL = "https://download.ericzimmermanstools.com/net9/AmcacheParser.zip";  // official EZ mirror (.NET 9 build)
+var AMCP_PAGE = "https://ericzimmerman.github.io/";                            // for live latest-version lookup
+var LIVE_HIVE = "C:\\Windows\\appcompat\\Programs\\Amcache.hve";       // locked while Windows runs — snapshot before parsing
+var EXE = "";
+var EXE_DIR = "";
+var LOCAL_VER = "";
+var LATEST_VER = "";
+var WEB_OK = false;                  // could we reach the Zimmerman Tools site to check latest?
+var QUERY = "";
+var MAXROWS = 6000;
+var LASTOUTDIR = "";
+var qTimer = null;
+var MODE = "pf";                     // "pf" = rich Amcache analysis, "generic" = raw table
+var ROWS = [];                       // Amcache file-entry records (Unassociated + Associated merged)
+var CURCAT = "all";
+var DFROM = 0, DTO = 0;
+var VIEW = "files";                  // "files" | "progs" | "drv"
+var SORTKEY = 3, SORTDIR = -1;       // files view: default First seen desc
+var PSORTKEY = 4, PSORTDIR = -1;     // programs view: default Installed desc
+var DSORTKEY = 0, DSORTDIR = 1;      // drivers view: default Tags (score) — unsigned KMD first
+var IOC_HASHES = [];                 // lowercased 40-hex SHA1 IOCs (exact match)
+var IOC_TERMS = [];                  // lowercased keyword IOCs (substring match)
+var DETREC = null;                   // record currently shown in the detail pane
+var DETKIND = "file";                // which view the detail record belongs to: file | prog | drv
+var GHEAD = null, GROWS = [], GSRC = "";
+var GSORTKEY = -1, GSORTDIR = 1;
+var GSRCIDX = -1;                    // generic mode: index of the SourceFile(name) column
+var SRCFILTER = "";                  // selected source-file filter (generic mode)
+var BUSY = false;                    // a AmcacheParser run is in progress
+var PRODUCED = [];                   // CSVs produced by the last run
+
+/* suspicion knobs (spec §7) */
+var USERPATHS = ["\\users\\","\\appdata\\","\\temp\\","\\downloads\\","\\programdata\\","\\perflogs\\","\\windows\\temp\\","\\$recycle.bin\\","\\public\\"];
+var LOLBINS = {powershell:1,powershell_ise:1,pwsh:1,cmd:1,wscript:1,cscript:1,mshta:1,rundll32:1,regsvr32:1,certutil:1,certreq:1,
+  bitsadmin:1,msiexec:1,curl:1,wget:1,node:1,java:1,javaw:1,python:1,pythonw:1,php:1,autoit3:1,nc:1,ncat:1,psexec:1,psexesvc:1,
+  wmic:1,schtasks:1,reg:1,sc:1};
+var OSNAMES = {svchost:1,lsass:1,csrss:1,services:1,winlogon:1,explorer:1,taskhostw:1,dllhost:1,conhost:1,smss:1,wininit:1};
+var RECENT_DAYS = 14;
+
+/* ---------- tiny helpers ---------- */
+function $(id){ return document.getElementById(id); }
+function esc(s){ if(s==null) return ""; s=String(s);
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function endsWith(s,suf){ if(!s) return false; s=String(s); return s.length>=suf.length && s.substring(s.length-suf.length)===suf; }
+function contains(s,sub){ return String(s).indexOf(sub)>=0; }
+function nf(n){ n=String(n); var dot=n.indexOf("."); var dec=""; if(dot>=0){ dec=n.substring(dot); n=n.substring(0,dot); }
+  var r="",c=0; for(var k=n.length-1;k>=0;k--){ r=n.charAt(k)+r; c++; if(c%3===0&&k>0) r=","+r; } return r+dec; }
+function setStatus(msg,cls){ var el=$("status"); el.innerHTML=esc(msg); el.className=cls||"muted"; }
+function appendLog(t){ var el=$("log"); if(el.getAttribute("data-ph")==="1"){ el.innerHTML=""; el.setAttribute("data-ph","0"); }
+  el.style.display="block"; $("logToggle").innerHTML="Hide log"; el.innerHTML+=esc(t)+"\n"; el.scrollTop=el.scrollHeight; }
+function trimStr(s){ return String(s).replace(/^\s+|\s+$/g,""); }
+function baseName(p){ if(!p) return ""; p=String(p); var i=Math.max(p.lastIndexOf("\\"),p.lastIndexOf("/")); return i>=0?p.substring(i+1):p; }
+function showEl(id,vis){ var e=$(id); if(!e) return; var c=e.className.replace(/\s*\bhide\b/g,"");
+  e.className = vis ? c : (c+" hide"); }
+function msOf(s){ if(!s) return 0; var m=String(s).match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  if(!m) return 0; return Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]); }
+function dayOf(s){ if(!s) return 0; var m=String(s).match(/(\d{4})-(\d{2})-(\d{2})/); if(!m) return 0; return Number(m[1]+m[2]+m[3]); }
+function stripVol(p){ return String(p).replace(/\\VOLUME\{[^}]*\}/gi,""); }
+
+/* ---------- file IO via ActiveX (UTF-8 safe, with network-zone fallback) ----------
+   ADODB.Stream is the proper UTF-8 reader, but when the .hta runs from a NETWORK location
+   (mapped drive / UNC share) mshta assigns it the intranet/internet zone and ADODB refuses
+   every LoadFromFile/SaveToFile with "Safety settings on this computer prohibit accessing a
+   data source on another domain" — regardless of where the target file lives. Seen in the
+   field 2026-07-02 (app run from Z:\ on an analysis VM). FSO is not zone-checked, so we fall
+   back to ANSI file IO: CSV structure is unaffected (all-ASCII), only rare non-ASCII chars
+   (accented usernames in paths) display mojibake'd. Best fidelity = run locally. */
+var FILE_IO="adodb";                 // flips to "fso" permanently on the first zone-policy block
+function zoneNote(){
+  appendLog("NOTE: this app is running from a network location, so Windows zone policy blocks the UTF-8 file reader (ADODB.Stream). Falling back to ANSI file IO — everything works, but non-ASCII characters (accented usernames in paths) may display incorrectly. For full fidelity copy this folder to a LOCAL path (e.g. C:\\Tools\\AmcacheParser) and run it from there.");
+}
+function readUtf8(path){
+  if(FILE_IO==="adodb"){
+    try{
+      // ReadText(-1) on a large file is quadratic in MSHTML (30s for 16MB); read in 64KB chunks (~0.1s).
+      var st=new ActiveXObject("ADODB.Stream");
+      st.Type=2; st.Charset="utf-8"; st.Open(); st.LoadFromFile(path);
+      var parts=[]; while(!st.EOS){ parts.push(st.ReadText(65536)); } st.Close();
+      return parts.join("");
+    }catch(e){
+      if(!/safety settings|data source/i.test(e.message||"")) throw e;   // real IO errors propagate
+      FILE_IO="fso"; zoneNote();
+    }
+  }
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var f=fso.OpenTextFile(path,1,false,0), out=f.ReadAll(); f.Close();
+  // a UTF-8 BOM read as ANSI shows up as three cp1252 chars — strip it
+  if(out.length>=3 && out.charCodeAt(0)===239 && out.charCodeAt(1)===187 && out.charCodeAt(2)===191) out=out.substring(3);
+  return out;
+}
+function writeUtf8(path,text){
+  if(FILE_IO==="adodb"){
+    try{
+      var st=new ActiveXObject("ADODB.Stream");
+      st.Type=2; st.Charset="utf-8"; st.Open(); st.WriteText(text); st.SaveToFile(path,2); st.Close();
+      return;
+    }catch(e){
+      if(!/safety settings|data source/i.test(e.message||"")) throw e;
+      FILE_IO="fso"; zoneNote();
+    }
+  }
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var f=fso.CreateTextFile(path,true,false); f.Write(text); f.Close();
+}
+function uid(){ return new Date().getTime()+""+Math.floor(Math.random()*100000); }
+/* cmd expands %N / %VAR% inside .bat lines even within quotes — Velociraptor trees contain literal % (C%3A) */
+function batEsc(s){ return String(s).replace(/%/g,"%%"); }
+
+/* Run a batch script, wait, return {rc, log}. show=true → visible console window. */
+function runBat(lines, show){
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var sh=new ActiveXObject("WScript.Shell");
+  var tmp=fso.GetSpecialFolder(2)+"";
+  var stamp=uid();
+  var bat=tmp+"\\amc_"+stamp+".bat";
+  var logp=tmp+"\\amc_"+stamp+".log";
+  var f=fso.CreateTextFile(bat,true);
+  f.WriteLine("@echo off");
+  for(var i=0;i<lines.length;i++){ f.WriteLine(lines[i].replace(/__LOG__/g,logp)); }
+  f.Close();
+  var rc=sh.Run('cmd /c ""'+bat+'""', show?1:0, true);
+  var txt="";
+  try{ if(fso.FileExists(logp)) txt=readUtf8(logp); }catch(e){ txt="(could not read log: "+e.message+")"; }
+  try{ fso.DeleteFile(bat); }catch(e2){}
+  try{ if(fso.FileExists(logp)) fso.DeleteFile(logp); }catch(e3){}
+  return { rc:rc, log:txt };
+}
+
+/* Run a batch NON-blocking; writes a .done marker when finished. Caller polls with pollDone().
+   This keeps the HTA script responsive (no MSHTML long-running-script watchdog). */
+function runBatAsync(lines, show){
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var sh=new ActiveXObject("WScript.Shell");
+  var tmp=fso.GetSpecialFolder(2)+"";
+  var stamp=uid();
+  var bat=tmp+"\\amc_"+stamp+".bat";
+  var logp=tmp+"\\amc_"+stamp+".log";
+  var donep=tmp+"\\amc_"+stamp+".done";
+  var f=fso.CreateTextFile(bat,true);
+  f.WriteLine("@echo off");
+  for(var i=0;i<lines.length;i++){ f.WriteLine(lines[i].replace(/__LOG__/g,logp)); }
+  f.WriteLine('echo done> "'+donep+'"');   // marker written after everything above completes
+  f.Close();
+  sh.Run('cmd /c ""'+bat+'""', show?1:0, false);   // false = do NOT block the script
+  return { bat:bat, log:logp, done:donep, elapsed:0 };
+}
+function pollDone(ctx){
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  if(fso.FileExists(ctx.done)){
+    var log=""; try{ if(fso.FileExists(ctx.log)) log=readUtf8(ctx.log); }catch(e){ log="(could not read log: "+e.message+")"; }
+    try{ fso.DeleteFile(ctx.bat); }catch(e1){}
+    try{ fso.DeleteFile(ctx.done); }catch(e2){}
+    try{ if(fso.FileExists(ctx.log)) fso.DeleteFile(ctx.log); }catch(e3){}
+    ctx.onDone(log);
+    return;
+  }
+  ctx.elapsed+=1;
+  if(ctx.elapsed>1800){ ctx.onTimeout&&ctx.onTimeout(); return; }   // 30-min safety cap
+  if(ctx.onTick) ctx.onTick(ctx.elapsed);
+  window.setTimeout(function(){ pollDone(ctx); }, 1000);
+}
+
+/* ---------- source-file filter (generic mode) ---------- */
+function distinctVals(arr){ var seen={}, out=[]; for(var i=0;i<arr.length;i++){ var v=arr[i]; if(v!=null && v!=="" && !seen[v]){ seen[v]=1; out.push(v); } } return out; }
+function shortPathN(p,n){ p=String(p); var parts=p.split("\\"); if(parts.length<=n) return p; return "…\\"+parts.slice(parts.length-n).join("\\"); }
+function shortPath(p){ return shortPathN(p,4); }
+function populateSourceFilter(vals){
+  var sel=$("srcSel"); sel.innerHTML="";
+  var o0=document.createElement("option"); o0.value=""; o0.text="all source files ("+vals.length+")"; sel.add(o0);
+  vals=vals.slice(0).sort();
+  for(var i=0;i<vals.length;i++){ var o=document.createElement("option"); o.value=vals[i]; o.text=shortPath(vals[i]); sel.add(o); }
+  SRCFILTER=""; sel.value="";
+  showEl("srcWrap", vals.length>1);
+}
+
+/* ---------- tooling: locate / version / download ---------- */
+function fileExists(p){ try{ return new ActiveXObject("Scripting.FileSystemObject").FileExists(p); }catch(e){ return false; } }
+function folderExists(p){ try{ return new ActiveXObject("Scripting.FileSystemObject").FolderExists(p); }catch(e){ return false; } }
+function parentDir(p){ var i=String(p).lastIndexOf("\\"); return i>=0?p.substring(0,i):p; }
+function htaFolder(){
+  try{ var cl=amcacheHta.commandLine+""; var m=cl.match(/"([^"]+\.hta)"/i); if(!m) m=cl.match(/([A-Za-z]:\\[^"]+\.hta)/i);
+    if(m) return parentDir(m[1]); }catch(e){}
+  try{ var p=decodeURIComponent(location.pathname+"").replace(/^\//,"").replace(/\//g,"\\"); return parentDir(p); }catch(e2){}
+  return "";
+}
+function resolveExe(){
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var dir=htaFolder(), cands=[];
+  if(dir) cands.push(dir+"\\AmcacheParser.exe");
+  cands.push("C:\\ZimmermanTools\\net6\\AmcacheParser.exe");   // prefer net6/net9 builds; the root net4 exe is console-fragile
+  cands.push("C:\\ZimmermanTools\\AmcacheParser.exe");
+  for(var i=0;i<cands.length;i++){ if(fso.FileExists(cands[i])){ EXE=cands[i]; EXE_DIR=parentDir(cands[i]); return true; } }
+  EXE=""; EXE_DIR=dir||""; return false;
+}
+function checkDeps(){
+  // framework-dependent builds ship AmcacheParser.dll + runtimeconfig next to the exe; self-contained net4 has neither
+  var fso=new ActiveXObject("Scripting.FileSystemObject"); var miss=[];
+  if(!EXE_DIR) return ["(install folder unknown)"];
+  if(fso.FileExists(EXE_DIR+"\\AmcacheParser.runtimeconfig.json") && !fso.FileExists(EXE_DIR+"\\AmcacheParser.dll")) miss.push("AmcacheParser.dll");
+  return miss;
+}
+function verTuple(v){ var p=String(v).split("."); var a=[]; for(var i=0;i<p.length;i++) a.push(parseInt(p[i],10)||0); return a; }
+function verCmp(a,b){ a=verTuple(a); b=verTuple(b); var n=Math.max(a.length,b.length);
+  for(var i=0;i<n;i++){ var x=a[i]||0,y=b[i]||0; if(x!==y) return x<y?-1:1; } return 0; }
+function fetchLatest(){
+  LATEST_VER=KNOWN_LATEST_AMCP; WEB_OK=false;
+  try{
+    var x=new ActiveXObject("MSXML2.ServerXMLHTTP.6.0");
+    x.setTimeouts(2000,3000,4000,4000);
+    x.open("GET", AMCP_PAGE, false); x.send();
+    if(x.status===200){ WEB_OK=true; var t=x.responseText+""; var m=t.match(/AmcacheParser[\s\S]{0,800}?(\d+\.\d+\.\d+)/i); if(m) LATEST_VER=m[1]; }
+  }catch(e){ WEB_OK=false; }
+  return LATEST_VER;
+}
+function updateVerPill(){
+  var s=LOCAL_VER?("AmcacheParser v"+esc(LOCAL_VER)):"AmcacheParser: not found";
+  if(!WEB_OK){ s+=" &middot; <span style='color:#8b949e'>no internet / no web source</span>"; }
+  else if(LATEST_VER){
+    if(LOCAL_VER && verCmp(LOCAL_VER,LATEST_VER)<0) s+=" &middot; <span style='color:#d29922'>update v"+esc(LATEST_VER)+" available</span>";
+    else if(LOCAL_VER) s+=" &middot; <span style='color:#3fb950'>latest</span>";
+    else s+=" &middot; latest v"+esc(LATEST_VER);
+  }
+  $("verpill").innerHTML=s;
+}
+function evaluateTooling(promptIfNeeded){
+  var dir=htaFolder();
+  var localComplete = dir ? fileExists(dir+"\\AmcacheParser.exe") : false;   // exe next to the .hta (self-contained)
+  var found=resolveExe();
+  if(EXE) $("exeline").innerHTML="Tool: "+esc(EXE)+"  &middot;  run with DOTNET_ROLL_FORWARD=Major (covers .NET 9-target builds)";
+  else $("exeline").innerHTML='<span class="err">AmcacheParser.exe not found next to this app ('+esc(dir||"app folder")+') or in C:\\ZimmermanTools</span>';
+  if(found) checkVersion(); else { LOCAL_VER=""; }
+  fetchLatest(); updateVerPill();
+  if(found){ var miss=checkDeps(); if(miss.length) setStatus("AmcacheParser support files missing next to the exe: "+miss.join(", "),"err"); }
+  if(!promptIfNeeded) return;
+  if(localComplete){
+    // exe already next to the .hta → only prompt when the web says a newer version exists
+    if(WEB_OK && LOCAL_VER && verCmp(LOCAL_VER,LATEST_VER)<0){
+      if(confirm("A newer AmcacheParser is available.\n\nNext to this app: v"+LOCAL_VER+"\nLatest online:   v"+LATEST_VER+"\n\nDownload the update next to the app now?")) downloadLatest();
+    }
+  } else {
+    if(WEB_OK){
+      var msg = (found ? ("AmcacheParser is not set up next to this app (currently using "+EXE+").\n\n") : "AmcacheParser.exe was not found.\n\n")
+        + "Download the latest (v"+LATEST_VER+") to a self-contained copy next to the app at:\n"+(dir||"?")+"\n\nProceed?";
+      if(confirm(msg)) downloadLatest();
+    } else if(found){
+      setStatus("Using local AmcacheParser ("+EXE+") — no internet to reach Zimmerman Tools, so can't verify/download the latest.","muted");
+    } else {
+      setStatus("AmcacheParser.exe not found next to this .hta and no internet to download it. Place AmcacheParser.exe (net6/net9 build) next to this .hta.","err");
+    }
+  }
+}
+function downloadLatest(){
+  var target=htaFolder()||EXE_DIR;   // always install next to the .hta (self-contained)
+  if(!target){ setStatus("Cannot determine the app folder to install into","err"); return; }
+  if(!WEB_OK && !confirm("The Zimmerman Tools site did not respond earlier (no internet?).\n\nTry downloading AmcacheParser from\n"+AMCP_ZIP_URL+"\ninto\n"+target+" anyway?")) return;
+  if(WEB_OK && !confirm("Download latest AmcacheParser (v"+(LATEST_VER||KNOWN_LATEST_AMCP)+") from:\n"+AMCP_ZIP_URL+"\n\nInstall next to the app into:\n"+target+"\n\nProceed?")) return;
+  setStatus("Downloading & installing AmcacheParser… (give it a moment)","muted");
+  var tq=String(target).replace(/'/g,"''");
+  var ps="$ErrorActionPreference='Stop';"
+    +"[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;"
+    +"$u='"+AMCP_ZIP_URL+"';"
+    +"$z=Join-Path $env:TEMP 'AmcacheParser_dl.zip';"
+    +"$x=Join-Path $env:TEMP ('AmcacheParser_x_'+[guid]::NewGuid().ToString('N'));"
+    +"Invoke-WebRequest -Uri $u -OutFile $z;"
+    +"Expand-Archive -Force -Path $z -DestinationPath $x;"
+    +"$exe=Get-ChildItem -Path $x -Recurse -Filter AmcacheParser.exe | Select-Object -First 1;"
+    +"if(-not $exe){throw 'AmcacheParser.exe not found in downloaded archive'};"
+    +"$src=Split-Path $exe.FullName;"
+    +"New-Item -ItemType Directory -Force -Path '"+tq+"' | Out-Null;"
+    +"Copy-Item -Path (Join-Path $src '*') -Destination '"+tq+"' -Recurse -Force;"
+    +"Remove-Item $z,$x -Recurse -Force -ErrorAction SilentlyContinue;"
+    +"Write-Output 'INSTALL_OK'";
+  try{
+    var r=runBat(['powershell -NoProfile -ExecutionPolicy Bypass -Command "'+ps+'" > "__LOG__" 2>&1']);
+    appendLog("--- AmcacheParser download / install ---\n"+r.log);
+    if((r.log+"").indexOf("INSTALL_OK")>=0){ setStatus("AmcacheParser installed to "+target,"ok"); evaluateTooling(false); }
+    else setStatus("Download/install failed — see log","err");
+  }catch(e){ setStatus("Download failed: "+e.message,"err"); }
+}
+
+/* ---------- actions ---------- */
+function checkVersion(){
+  if(!EXE || !fileExists(EXE)){ LOCAL_VER=""; updateVerPill(); setStatus("AmcacheParser.exe not found — use 'Update / download AmcacheParser'","err"); return; }
+  try{
+    var r=runBat([
+      "set DOTNET_ROLL_FORWARD=Major",
+      '"'+EXE+'" > "__LOG__" 2>&1'
+    ]);
+    var m=r.log.match(/AmcacheParser version ([0-9.]+)/i);
+    if(m){ LOCAL_VER=m[1]; updateVerPill(); setStatus("AmcacheParser v"+LOCAL_VER+" detected","ok"); }
+    else { LOCAL_VER=""; updateVerPill(); setStatus("Ran AmcacheParser but could not parse version — see log","err"); appendLog(r.log); }
+  }catch(e){ LOCAL_VER=""; updateVerPill(); setStatus("Version check failed: "+e.message,"err"); }
+}
+
+/* can we actually enumerate this folder? (live C:\Windows\Prefetch is admin-only) */
+function canListFolder(p){
+  try{ var fso=new ActiveXObject("Scripting.FileSystemObject");
+    var e=new Enumerator(fso.GetFolder(p).Files); e.atEnd(); return true; }catch(err){ return false; }
+}
+
+/* recursively find Amcache.hve under a collection root (KAPE / Velociraptor trees; URL-encoded
+   path segments like C%3A are just literal characters to FSO). Unreadable subfolders are skipped.
+   Capped — a hit list longer than HIVE_MAX means the wrong root was picked anyway. */
+var HIVE_MAX=20, HIVE_DEPTH_MAX=24, HIVE_SCAN_MAX=30000, HIVE_DIRS_SCANNED=0;
+function findHives(root){
+  var fso=new ActiveXObject("Scripting.FileSystemObject"), out=[];
+  HIVE_DIRS_SCANNED=0;
+  function walk(fld,depth){
+    if(out.length>=HIVE_MAX||depth>HIVE_DEPTH_MAX||HIVE_DIRS_SCANNED>=HIVE_SCAN_MAX) return;
+    HIVE_DIRS_SCANNED++;
+    try{
+      var fe=new Enumerator(fld.Files);
+      for(;!fe.atEnd();fe.moveNext()){ var f=fe.item();
+        if(String(f.Name).toLowerCase()==="amcache.hve"){ out.push({path:f.Path+"", size:f.Size}); if(out.length>=HIVE_MAX) return; } }
+    }catch(e1){}
+    try{
+      var de=new Enumerator(fld.SubFolders);
+      for(;!de.atEnd();de.moveNext()){ walk(de.item(),depth+1); if(out.length>=HIVE_MAX) return; }
+    }catch(e2){}
+  }
+  try{ walk(fso.GetFolder(root),0); }catch(e){}
+  return out;
+}
+
+/* snapshot the LIVE (locked) hive + transaction logs via esentutl /vss — needs elevation */
+function snapshotLive(){
+  if(BUSY){ setStatus("A run is already in progress — wait for it to finish.","err"); return; }
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var base=htaFolder(); if(!base){ setStatus("Cannot determine the app folder","err"); return; }
+  var snapRoot=base+"\\LiveSnapshot";
+  try{ if(!fso.FolderExists(snapRoot)) fso.CreateFolder(snapRoot); }catch(e0){}
+  var dst=snapRoot+"\\"+nowStamp();
+  try{ if(!fso.FolderExists(dst)) fso.CreateFolder(dst); }catch(e1){ setStatus("Cannot create "+dst+": "+e1.message,"err"); return; }
+  var src="C:\\Windows\\appcompat\\Programs";
+  BUSY=true; $("procBtn").disabled=true;
+  appendLog("Snapshotting live Amcache via esentutl /y /vss into "+dst+" …");
+  var ctx=runBatAsync([
+    "echo Snapshotting the live Amcache hive (esentutl /vss — needs an elevated app)…",
+    'esentutl.exe /y "'+src+'\\Amcache.hve" /vss /d "'+dst+'\\Amcache.hve" >> "__LOG__" 2>&1',
+    'esentutl.exe /y "'+src+'\\Amcache.hve.LOG1" /vss /d "'+dst+'\\Amcache.hve.LOG1" >> "__LOG__" 2>&1',
+    'esentutl.exe /y "'+src+'\\Amcache.hve.LOG2" /vss /d "'+dst+'\\Amcache.hve.LOG2" >> "__LOG__" 2>&1'
+  ], true);
+  ctx.onTick=function(s){ setStatus("esentutl running… "+s+"s","muted"); };
+  ctx.onTimeout=function(){ BUSY=false; $("procBtn").disabled=false; setStatus("esentutl still running after 30 min — check the console window.","err"); };
+  ctx.onDone=function(lg){
+    BUSY=false; $("procBtn").disabled=false;
+    appendLog("--- esentutl output ---\n"+lg);
+    if(fileExists(dst+"\\Amcache.hve")){
+      $("pfPath").value=dst+"\\Amcache.hve";
+      var haveLogs=fileExists(dst+"\\Amcache.hve.LOG1")&&fileExists(dst+"\\Amcache.hve.LOG2");
+      setStatus("Live hive snapshotted to "+dst+(haveLogs?"":" — transaction logs did NOT copy; parsing may miss the newest entries")+" — click 'Process → analyze'.","ok");
+    } else {
+      try{ fso.DeleteFolder(dst); }catch(e2){}
+      setStatus("Snapshot FAILED — esentutl /vss needs an ELEVATED app. Relaunch as administrator (right-click → Run as administrator), or collect the hive with Velociraptor/KAPE instead. See the log.","err");
+    }
+  };
+  setStatus("Snapshotting live Amcache…","muted");
+  window.setTimeout(function(){ pollDone(ctx); }, 1000);
+}
+
+function processPf(){
+  var inp=$("pfPath").value;
+  var outdir=$("outDir").value;
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  showEl("hiveRow",false);
+  if(inp && fso.FolderExists(inp)){
+    // folder given → search it recursively for Amcache.hve (collection trees, URL-encoded segments and all)
+    setStatus("Searching "+inp+" for Amcache.hve…","muted");
+    var hives=findHives(inp);
+    if(!hives.length){ setStatus("No Amcache.hve found under "+inp+" (searched "+nf(HIVE_DIRS_SCANNED)+" folders"+(HIVE_DIRS_SCANNED>=HIVE_SCAN_MAX?" — search capped, pick a more specific root":"")+"). Collections usually hold it at …\\Windows\\appcompat\\Programs\\Amcache.hve.","err"); return; }
+    if(hives.length===1){
+      inp=hives[0].path; $("pfPath").value=inp;
+      appendLog("Hive discovery: 1 hit under the folder — using "+inp);
+    } else {
+      var hsel=$("hiveSel"); hsel.innerHTML="";
+      for(var hi=0;hi<hives.length;hi++){ var ho=document.createElement("option"); ho.value=hives[hi].path; ho.text=shortPathN(hives[hi].path,6)+"  ("+fmtSize(hives[hi].size)+")"; hsel.add(ho); }
+      showEl("hiveRow",true);
+      setStatus(hives.length+" Amcache hives found under that folder — pick one and click 'Use selected → process'."+(hives.length>=HIVE_MAX?(" Search capped at "+HIVE_MAX+" — consider a more specific root."):""),"muted");
+      return;
+    }
+  }
+  if(!inp||!fso.FileExists(inp)){ setStatus("Hive not found: "+inp+" — point at an Amcache.hve or a collection folder (the live hive is locked while Windows runs).","err"); return; }
+  if(!outdir){ setStatus("Set an output directory","err"); return; }
+  if(!EXE||!fileExists(EXE)){ setStatus("AmcacheParser.exe not found — download it first","err"); return; }
+  var extra="";
+  if($("optInc").checked) extra+=" -i";
+  if($("optNl").checked) extra+=" --nl";
+  var before=csvNameSet(outdir);
+  if(BUSY){ setStatus("An AmcacheParser run is already in progress — wait for it to finish.","err"); return; }
+  appendLog("Running: \""+EXE+"\" -f \""+inp+"\" --csv \""+outdir+"\""+extra
+    +"\nA console window shows progress; the app stays responsive and loads results automatically when done.");
+  BUSY=true; $("procBtn").disabled=true;
+  var binp=batEsc(inp), bout=batEsc(outdir);
+  var ctx=runBatAsync([
+    "set DOTNET_ROLL_FORWARD=Major",
+    'if not exist "'+bout+'" mkdir "'+bout+'"',
+    "echo AmcacheParser is processing:",
+    'echo   '+binp,
+    "echo Output: "+bout,
+    "echo This window closes automatically when finished.",
+    "echo.",
+    '"'+batEsc(EXE)+'" -f "'+binp+'" --csv "'+bout+'"'+extra+' > "__LOG__" 2>&1'
+  ], true);
+  ctx.onTick=function(s){ setStatus("AmcacheParser running… "+s+"s elapsed (app responsive; results load when done)","muted"); };
+  ctx.onTimeout=function(){ BUSY=false; $("procBtn").disabled=false; setStatus("AmcacheParser still running after 30 min — stopped watching. Check the output folder / console window.","err"); };
+  ctx.onDone=function(log){ BUSY=false; $("procBtn").disabled=false; processPfDone(log,outdir,before); };
+  setStatus("AmcacheParser starting…","muted");
+  window.setTimeout(function(){ pollDone(ctx); }, 1000);
+}
+function processPfDone(log,outdir,before){
+  appendLog("--- AmcacheParser output ---\n"+log);
+  LASTOUTDIR=outdir;
+  var all=listCsvFiles(outdir);
+  var fresh=[]; for(var i=0;i<all.length;i++){ if(!before[all[i].name]) fresh.push(all[i]); }
+  if(!fresh.length){
+    // no new output — diagnose why, leniently (load nothing but explain)
+    // NB "Warning: Administrator privileges not found!" is cosmetic and appears on SUCCESSFUL runs — never alarm on it.
+    if(/being used by another process|sharing violation/i.test(log))
+      setStatus("AmcacheParser could not open the hive — it is LOCKED (live system hive). Parse a collected copy, or snapshot it first with: esentutl.exe /y \""+LIVE_HIVE+"\" /vss /d <dest>  (elevated console).","err");
+    else if(/Sequence numbers|transaction log|log file/i.test(log) && /error|fail|exception/i.test(log))
+      setStatus("AmcacheParser failed during transaction-log replay — the .LOG1/.LOG2 next to the hive may be corrupt or mismatched. Tick 'skip log replay' (--nl) and run again.","err");
+    else if(/denied|unauthorized/i.test(log))
+      setStatus("AmcacheParser was denied access to the input file — check NTFS permissions, or relaunch this app elevated.","err");
+    else
+      setStatus("AmcacheParser produced no new CSV — see the log (is this really an Amcache.hve?).","err");
+    populateProduced(all);
+    return;
+  }
+  var errNote = /is in old format/i.test(log) ? " — note: OLD-format (Win8-era) hive; reduced CSV set, generic grid only." : "";
+  PRODUCED=fresh;
+  populateProduced(fresh);
+  // auto-load the unassociated file entries (the primary dataset); the other 7 CSVs stay in the picker
+  var main=null;
+  for(var j=0;j<fresh.length;j++){ if(/_Amcache_UnassociatedFileEntries\.csv$/i.test(fresh[j].name)){ if(!main||fresh[j].name>main.name) main=fresh[j]; } }
+  if(!main){ main=fresh[0]; for(var k=1;k<fresh.length;k++){ if(fresh[k].size>main.size) main=fresh[k]; } }
+  try{ $("producedSel").value=main.path; }catch(e){}
+  setStatus("Produced "+fresh.length+" CSV(s); loaded "+main.name+". Pick the others from 'Produced CSVs'."+errNote,"ok");
+  loadCsvFile(main.path);
+}
+function csvNameSet(dir){ var o={}, l=listCsvFiles(dir); for(var i=0;i<l.length;i++) o[l[i].name]=true; return o; }
+function listCsvFiles(dir){
+  var fso=new ActiveXObject("Scripting.FileSystemObject"), out=[];
+  if(!fso.FolderExists(dir)) return out;
+  var e=new Enumerator(fso.GetFolder(dir).Files);
+  for(; !e.atEnd(); e.moveNext()){ var f=e.item(); if(/\.csv$/i.test(f.Name+"")) out.push({name:f.Name+"", path:f.Path+"", size:f.Size}); }
+  out.sort(function(a,b){ return a.name<b.name?1:(a.name>b.name?-1:0); });   // newest timestamp-prefix first
+  return out;
+}
+function fmtSize(n){ if(!n) return "0 B"; var u=["B","KB","MB","GB"], i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;} return n.toFixed(i?1:0)+" "+u[i]; }
+function populateProduced(list){
+  var sel=$("producedSel"); sel.innerHTML="";
+  for(var i=0;i<list.length;i++){
+    var lab=list[i].name+"  ("+fmtSize(list[i].size)+")";
+    if(/UnassociatedFileEntries\.csv$/i.test(list[i].name)) lab+="  —  file entries with no program link (primary dataset)";
+    else if(/_AssociatedFileEntries\.csv$/i.test(list[i].name)) lab+="  —  file entries linked to installed programs";
+    else if(/_ProgramEntries\.csv$/i.test(list[i].name)) lab+="  —  installed programs";
+    else if(/_DriveBinaries\.csv$/i.test(list[i].name)) lab+="  —  drivers (signing / kernel-mode)";
+    else if(/_ShortCuts\.csv$/i.test(list[i].name)) lab+="  —  shortcuts";
+    else if(/_DevicePnps\.csv$/i.test(list[i].name)) lab+="  —  PnP devices";
+    else if(/_DeviceContainers\.csv$/i.test(list[i].name)) lab+="  —  device containers";
+    else if(/_DriverPackages\.csv$/i.test(list[i].name)) lab+="  —  driver packages";
+    var o=document.createElement("option"); o.value=list[i].path; o.text=lab; sel.add(o);
+  }
+  showEl("producedRow", list.length>0);
+}
+function openDir(){ var d=$("outDir").value; if(!d){ setStatus("No output directory set","err"); return; }
+  try{ new ActiveXObject("WScript.Shell").Run('explorer.exe "'+d+'"',1,false); }catch(e){ setStatus("Could not open folder: "+e.message,"err"); } }
+
+/* ---------- CSV parser (RFC4180) — line-split hybrid: native split for the bulk,
+   careful field parsing only for lines containing quotes; merges rows split across
+   newlines inside quoted fields. Orders of magnitude faster than char-by-char in MSHTML. */
+function countQuotes(s){ var c=0, idx=-1; while((idx=s.indexOf('"',idx+1))>=0) c++; return c; }
+function parseCSVLine(line){
+  if(line.indexOf('"')<0) return line.split(",");   // fast path: no quotes → plain split
+  var out=[], field="", q=false, i=0, n=line.length;
+  while(i<n){ var c=line.charAt(i);
+    if(q){ if(c==='"'){ if(line.charAt(i+1)==='"'){ field+='"'; i+=2; continue; } q=false; i++; continue; } field+=c; i++; continue; }
+    if(c==='"'){ q=true; i++; continue; }
+    if(c===','){ out.push(field); field=""; i++; continue; }
+    field+=c; i++;
+  }
+  out.push(field); return out;
+}
+function parseCSV(text){
+  if(text.charCodeAt(0)===0xFEFF) text=text.substring(1);
+  var lines=text.split("\n"), rows=[], i=0, n=lines.length;
+  while(i<n){
+    var line=lines[i]; i++;
+    // a quoted field may contain a newline → merge continuation lines until quotes balance
+    var qc=countQuotes(line);
+    while((qc%2)===1 && i<n){ line+="\n"+lines[i]; qc+=countQuotes(lines[i]); i++; }
+    if(line.charAt(line.length-1)==='\r') line=line.substring(0,line.length-1);
+    if(line==="") continue;
+    rows.push(parseCSVLine(line));
+  }
+  return rows;
+}
+
+/* ---------- ingest dispatch ---------- */
+function loadCsvFile(path){
+  try{
+    var text=readUtf8(path);
+    var raw=parseCSV(text);
+    if(!raw||!raw.length){ setStatus("Empty / unparseable CSV","err"); return; }
+    var idx=amcHeaderIdx(raw);
+    if(isAmcFileHead(idx)) ingestAmcache(path, raw, idx);
+    else if(isAmcProgHead(idx)) ingestAmcacheAux(path, raw, idx, "progs");
+    else if(isAmcDrvHead(idx)) ingestAmcacheAux(path, raw, idx, "drv");
+    else ingestGeneric(raw, raw[0], baseName(path));
+  }catch(e){ setStatus("Could not read CSV: "+e.message,"err"); }
+}
+function cell(rw,i){ return (i>=0&&i<rw.length)?rw[i]:""; }
+function numv(v){ var x=parseFloat(v); return isFinite(x)?x:0; }
+
+/* ---------- Amcache ingest (spec §6) ---------- */
+var PROGS=[];                        // ProgramEntries of the loaded run (Phase 3 gets a dedicated view)
+var PROGBYID={};                     // ProgramId -> program record
+var DRIVERS=[];                      // DriveBinaries records of the loaded run
+function amcHeaderIdx(raw){ var idx={}, head=raw[0]; for(var h=0;h<head.length;h++) idx[trimStr(head[h])]=h; return idx; }
+function isAmcFileHead(idx){ return ("FileKeyLastWriteTimestamp" in idx) && ("SHA1" in idx) && ("FullPath" in idx); }
+function isAmcProgHead(idx){ return ("ProgramId" in idx) && ("UninstallString" in idx); }
+function isAmcDrvHead(idx){ return ("DriverSigned" in idx) && ("DriverIsKernelMode" in idx); }
+function amcBuildDrivers(raw, idx){
+  function gi(n){ return (n in idx)?idx[n]:-1; }
+  var iKey=gi("KeyName"), iKts=gi("KeyLastWriteTimestamp"), iDts=gi("DriverTimeStamp"), iLw=gi("DriverLastWriteTime"),
+      iName=gi("DriverName"), iBox=gi("DriverInBox"), iKm=gi("DriverIsKernelMode"), iSig=gi("DriverSigned"),
+      iCk=gi("DriverCheckSum"), iCo=gi("DriverCompany"), iId=gi("DriverId"), iPkg=gi("DriverPackageStrongName"),
+      iTy=gi("DriverType"), iVer=gi("DriverVersion"), iSz=gi("ImageSize"), iInf=gi("Inf"),
+      iProd=gi("Product"), iSvc=gi("Service"), iWdf=gi("WdfVersion");
+  DRIVERS=[];
+  for(var r=1;r<raw.length;r++){
+    var rw=raw[r]; if(rw.length<3) continue;
+    var nm=trimStr(cell(rw,iName)); var key=cell(rw,iKey);
+    if(!nm && key) nm=baseName(String(key).replace(/\//g,"\\"));
+    if(!nm) continue;
+    var lw=cell(rw,iLw);
+    var d={
+      keyName:key, keyTs:cell(rw,iKts),
+      drvTs:cell(rw,iDts),               // NB often bogus (hash-stamped future dates on signed drivers) — display only
+      lastWrite:lw, msLW:msOf(lw), dayLW:dayOf(lw),
+      name:nm, nameL:nm.toLowerCase(),
+      inBox:/^true$/i.test(trimStr(cell(rw,iBox))), kernel:/^true$/i.test(trimStr(cell(rw,iKm))),
+      signedRaw:trimStr(cell(rw,iSig)), signed:/^true$/i.test(trimStr(cell(rw,iSig))),
+      checksum:cell(rw,iCk), company:cell(rw,iCo), id:cell(rw,iId), pkg:cell(rw,iPkg),
+      dtype:cell(rw,iTy), ver:cell(rw,iVer), imgSize:numv(cell(rw,iSz)), inf:cell(rw,iInf),
+      product:cell(rw,iProd), service:cell(rw,iSvc), wdf:cell(rw,iWdf),
+      tags:[], reasons:[], score:0, sus:false
+    };
+    d.blob=(d.name+" "+d.keyName+" "+d.company+" "+d.product+" "+d.service+" "+d.inf+" "+d.pkg+" "+d.ver).toLowerCase();
+    DRIVERS.push(d);
+  }
+}
+function amcBuildRecords(raw, idx, assoc){
+  function gi(n){ return (n in idx)?idx[n]:-1; }
+  var iApp=gi("ApplicationName"), iPid=gi("ProgramId"), iTs=gi("FileKeyLastWriteTimestamp"), iSha=gi("SHA1"),
+      iOs=gi("IsOsComponent"), iFp=gi("FullPath"), iName=gi("Name"), iExt=gi("FileExtension"), iLd=gi("LinkDate"),
+      iPn=gi("ProductName"), iSize=gi("Size"), iVer=gi("Version"), iBt=gi("BinaryType"), iPe=gi("IsPeFile"),
+      iUsn=gi("Usn"), iDesc=gi("Description");
+  var out=[];
+  for(var r=1;r<raw.length;r++){
+    var rw=raw[r]; if(rw.length<3) continue;
+    var fp=trimStr(cell(rw,iFp));
+    var nm=trimStr(cell(rw,iName)); if(!nm && fp) nm=baseName(fp);
+    if(!nm && !fp) continue;
+    var ts=cell(rw,iTs), ld=cell(rw,iLd);
+    var rec={
+      name:nm, nameL:nm.toLowerCase(),
+      fullPath:fp, fullPathL:fp.toLowerCase(),
+      ext:cell(rw,iExt), sha1:trimStr(cell(rw,iSha)).toLowerCase(),
+      firstSeen:ts, msFirst:msOf(ts), dayFirst:dayOf(ts),
+      linkDate:ld, msLink:msOf(ld),
+      size:numv(cell(rw,iSize)), prod:cell(rw,iPn), ver:cell(rw,iVer),
+      isOs:/^true$/i.test(trimStr(cell(rw,iOs))), isPe:/^true$/i.test(trimStr(cell(rw,iPe))),
+      binType:cell(rw,iBt), usn:cell(rw,iUsn), descr:cell(rw,iDesc),
+      appName:cell(rw,iApp), programId:trimStr(cell(rw,iPid)),
+      assoc:assoc,
+      publisher:"", progName:"", installDate:"",
+      tags:[], reasons:[], score:0, sus:false, recent:false, multi:false
+    };
+    out.push(rec);
+  }
+  return out;
+}
+function amcBuildPrograms(raw, idx){
+  function gi(n){ return (n in idx)?idx[n]:-1; }
+  var iPid=gi("ProgramId"), iTs=gi("KeyLastWriteTimestamp"), iName=gi("Name"), iVer=gi("Version"), iPub=gi("Publisher"),
+      iArp=gi("InstallDateArpLastModified"), iInst=gi("InstallDate"), iMsi=gi("InstallDateMsi"), iRoot=gi("RootDirPath"),
+      iType=gi("Type"), iSrc=gi("Source"), iUn=gi("UninstallString");
+  PROGS=[]; PROGBYID={};
+  for(var r=1;r<raw.length;r++){
+    var rw=raw[r]; if(rw.length<3) continue;
+    var pid=trimStr(cell(rw,iPid)); if(!pid) continue;
+    var inst=cell(rw,iInst)||cell(rw,iArp)||cell(rw,iMsi);
+    var p={ pid:pid, keyTs:cell(rw,iTs), name:cell(rw,iName), ver:cell(rw,iVer), pub:cell(rw,iPub),
+      installDate:inst, rootDir:cell(rw,iRoot), type:cell(rw,iType), src:cell(rw,iSrc), uninst:cell(rw,iUn), nFiles:0 };
+    PROGS.push(p); PROGBYID[pid]=p;
+  }
+}
+function amcJoin(recs){
+  for(var i=0;i<recs.length;i++){ var rec=recs[i], p=PROGBYID[rec.programId];
+    if(p){ rec.publisher=p.pub; rec.progName=p.name; rec.installDate=p.installDate; p.nFiles++; }
+    rec.blob=(rec.name+" "+rec.fullPath+" "+rec.sha1+" "+rec.prod+" "+rec.publisher+" "+rec.progName+" "
+      +rec.appName+" "+rec.programId+" "+rec.ver+" "+rec.descr).toLowerCase();
+  }
+}
+/* siblings of one run share the timestamp prefix: <dir>\<ts>_Amcache_<kind>.csv */
+function amcSibling(path, kind){
+  var m=String(path).match(/^(.*\\)(\d+)_Amcache_[A-Za-z]+\.csv$/i);
+  if(!m) return "";
+  return m[1]+m[2]+"_Amcache_"+kind+".csv";
+}
+function ingestAmcache(path, raw, idx){
+  var isAssoc=/_Amcache_AssociatedFileEntries\.csv$/i.test(path);
+  var recs=amcBuildRecords(raw, idx, isAssoc);
+  var merged=""+baseName(path);
+  // merge the other file-entries CSV of the same run, and its ProgramEntries for the publisher join
+  var sib=amcSibling(path, isAssoc?"UnassociatedFileEntries":"AssociatedFileEntries");
+  if(sib && fileExists(sib)){
+    try{ var raw2=parseCSV(readUtf8(sib)); var idx2=amcHeaderIdx(raw2);
+      if(isAmcFileHead(idx2)){ recs=recs.concat(amcBuildRecords(raw2, idx2, !isAssoc)); merged+=" + "+baseName(sib); } }
+    catch(eS){ appendLog("Could not merge sibling CSV "+sib+": "+eS.message); }
+  }
+  PROGS=[]; PROGBYID={};
+  var pp=amcSibling(path,"ProgramEntries");
+  if(pp && fileExists(pp)){
+    try{ var raw3=parseCSV(readUtf8(pp)); var idx3=amcHeaderIdx(raw3);
+      if(isAmcProgHead(idx3)){ amcBuildPrograms(raw3, idx3); merged+=" + "+baseName(pp); } }
+    catch(eP){ appendLog("Could not load ProgramEntries "+pp+": "+eP.message); }
+  }
+  DRIVERS=[];
+  var dp=amcSibling(path,"DriveBinaries");
+  if(dp && fileExists(dp)){
+    try{ var raw4=parseCSV(readUtf8(dp)); var idx4=amcHeaderIdx(raw4);
+      if(isAmcDrvHead(idx4)){ amcBuildDrivers(raw4, idx4); merged+=" + "+baseName(dp); } }
+    catch(eD){ appendLog("Could not load DriveBinaries "+dp+": "+eD.message); }
+  }
+  amcJoin(recs);
+  ROWS=recs;
+  if(!ROWS.length){ ingestGeneric(raw, raw[0], baseName(path)); return; }
+  rescoreAll();
+  setMode("pf");
+  populateSourceFilter([]);
+  $("results").className="";
+  var na=0; for(var i=0;i<ROWS.length;i++){ if(ROWS[i].assoc) na++; }
+  $("srcpill").innerHTML=nf(ROWS.length)+" file entries ("+nf(na)+" assoc / "+nf(ROWS.length-na)+" unassoc) &middot; "+nf(PROGS.length)+" programs &middot; "+nf(DRIVERS.length)+" drivers &middot; "+esc(merged);
+  QUERY=""; $("q").value=""; DFROM=0; DTO=0; $("dfrom").value=""; $("dto").value="";
+  CURCAT="all"; highlightCat();
+  SORTKEY=3; SORTDIR=-1; PSORTKEY=4; PSORTDIR=-1; DSORTKEY=0; DSORTDIR=1;
+  $("vFiles").innerHTML="File entries ("+nf(ROWS.length)+")";
+  $("vProgs").innerHTML="Programs ("+nf(PROGS.length)+")";
+  $("vDrv").innerHTML="Drivers ("+nf(DRIVERS.length)+")";
+  setStatus("Loaded "+nf(ROWS.length)+" Amcache file entries ("+merged+")","ok");
+  setView("files");
+}
+/* direct load of a ProgramEntries / DriveBinaries CSV: prefer pulling in the whole run via its
+   FileEntries sibling; fall back to a standalone rich view of just this CSV */
+function ingestAmcacheAux(path, raw, idx, kind){
+  var fe=amcSibling(path,"UnassociatedFileEntries");
+  if(!fe||!fileExists(fe)) fe=amcSibling(path,"AssociatedFileEntries");
+  if(fe&&fileExists(fe)){
+    try{
+      var raw2=parseCSV(readUtf8(fe)); var idx2=amcHeaderIdx(raw2);
+      if(isAmcFileHead(idx2)){
+        ingestAmcache(fe, raw2, idx2);
+        setView(kind);
+        setStatus("Loaded the whole run behind "+baseName(path)+" — showing the "+((kind==="progs")?"Programs":"Drivers")+" view.","ok");
+        return;
+      }
+    }catch(eF){ appendLog("Could not load sibling FileEntries "+fe+": "+eF.message); }
+  }
+  ROWS=[]; PROGS=[]; PROGBYID={}; DRIVERS=[];
+  if(kind==="progs") amcBuildPrograms(raw, idx); else amcBuildDrivers(raw, idx);
+  rescoreAll();
+  setMode("pf");
+  populateSourceFilter([]);
+  $("results").className="";
+  $("srcpill").innerHTML=((kind==="progs")?(nf(PROGS.length)+" programs"):(nf(DRIVERS.length)+" drivers"))+" &middot; "+esc(baseName(path))+" (standalone)";
+  QUERY=""; $("q").value=""; DFROM=0; DTO=0; $("dfrom").value=""; $("dto").value="";
+  CURCAT="all";
+  $("vFiles").innerHTML="File entries (0)";
+  $("vProgs").innerHTML="Programs ("+nf(PROGS.length)+")";
+  $("vDrv").innerHTML="Drivers ("+nf(DRIVERS.length)+")";
+  setStatus("Loaded "+baseName(path)+" standalone — load a FileEntries CSV of the same run for the full set","ok");
+  setView(kind);
+}
+
+/* ---------- suspicion scoring (spec §7: H1 USERPATH, H2 LOLBIN, H3 RECENT, H4 RANDOM, H5 MASQ,
+   H6 IOC, H7 MULTI-PATH, H9 NOMETA, H10 FRESHPE — H8 unsigned drivers lands with the Phase 3 view) ---------- */
+function exeBase(nameL){ return nameL.replace(/\.(exe|com|scr|bat|cmd)$/,""); }
+function isUserPath(pL){ if(!pL) return false;
+  if(pL.indexOf("\\programdata\\microsoft\\windows defender\\")>=0) return false;   // Defender platform updates live here — chronic FP
+  if(pL.indexOf("\\programdata\\package cache\\")>=0) return false;                // MSI bundle caches, written elevated by installers — chronic FP (dominates Amcache noise)
+  for(var i=0;i<USERPATHS.length;i++){ if(pL.indexOf(USERPATHS[i])>=0) return true; } return false; }
+function looksRandom(nameL){
+  // tuned on real-world datasets: 5-consonant windows flag real names (MPCMDRUN), <=2-char names are covered by the LOLBIN list
+  var nm=exeBase(nameL).replace(/[^a-z0-9]/g,"");
+  if(/^[0-9a-f]{10,}$/.test(nm)) return true;                       // long pure-hex name
+  if(nm.length>=10){                                                // a 6-consonant run in a long name
+    for(var i=0;i+6<=nm.length;i++){ if(/^[bcdfghjklmnpqrstvwxz]{6}$/.test(nm.substr(i,6))) return true; }
+  }
+  return false;
+}
+function rescoreAll(){
+  var i, rec;
+  // dataset anchor: "recent" is relative to the newest first-seen in the dataset (collections are analyzed later,
+  // and the compatibility scanner may lag weeks behind real activity)
+  var maxMs=0;
+  for(i=0;i<ROWS.length;i++){ if(ROWS[i].msFirst>maxMs) maxMs=ROWS[i].msFirst; }
+  var recentCut=maxMs?(maxMs-RECENT_DAYS*86400000):0;
+  // same-name pass: one file name present under BOTH a system and a user-writable path (version segments neutralized)
+  var byName={};
+  for(i=0;i<ROWS.length;i++){ rec=ROWS[i];
+    if(!rec.fullPathL) continue;
+    var o=byName[rec.nameL]; if(!o) o=byName[rec.nameL]={paths:{},user:false,sys:false};
+    o.paths[normVerPath(rec.fullPathL)]=1;
+    if(isUserPath(rec.fullPathL)) o.user=true; else o.sys=true;
+  }
+  for(i=0;i<ROWS.length;i++){ rec=ROWS[i];
+    var n=0, k, o2=byName[rec.nameL];
+    if(o2){ for(k in o2.paths){ if(o2.paths.hasOwnProperty(k)) n++; } }
+    rec.multi=(n>1 && o2 && o2.user && o2.sys);
+  }
+  for(i=0;i<ROWS.length;i++){ scoreRec(ROWS[i], recentCut); }
+  scorePrograms();
+  scoreDrivers();
+}
+function normVerPath(pL){
+  var parts=pL.split("\\"), out=[];
+  for(var i=0;i<parts.length;i++){ out.push(/^(app-)?[\d.\-_]+$/.test(parts[i])?"#":parts[i]); }
+  return out.join("\\");
+}
+function scoreRec(rec, recentCut){
+  var tags=[], reasons=[], score=0;
+  var base=exeBase(rec.nameL);
+  var h1=isUserPath(rec.fullPathL);
+  rec.recent=(recentCut && rec.msFirst>=recentCut);
+  if(h1){ score+=2; tags.push("USERPATH"); reasons.push("Lives in a user-writable path: "+rec.fullPath); }
+  if(LOLBINS[base]){ score+=1; tags.push("LOLBIN"); reasons.push("LOLBIN / dual-use executable ("+rec.name+")");
+    if(h1){ score+=1; reasons.push("LOLBIN in a user-writable path"); } }
+  if(rec.recent){ score+=1; tags.push("RECENT"); reasons.push("First seen in the last "+RECENT_DAYS+" days of this dataset: "+rec.firstSeen); }
+  if(looksRandom(rec.nameL)){ score+=1; tags.push("RANDOM"); reasons.push("Random-looking file name"); }
+  if(rec.multi){ score+=1; tags.push("MULTI-PATH"); reasons.push("Same file name present under BOTH system and user-writable paths on this host"); }
+  if(OSNAMES[base] && rec.fullPathL && rec.fullPathL.indexOf("\\windows\\")<0){
+    score+=3; tags.push("MASQ"); reasons.push("OS-binary name OUTSIDE \\Windows\\: "+rec.fullPath); }
+  if(IOC_HASHES.length||IOC_TERMS.length){
+    var hits=[], x;
+    for(x=0;x<IOC_HASHES.length;x++){ if(rec.sha1===IOC_HASHES[x]){ hits.push("sha1:"+IOC_HASHES[x].substring(0,12)+"…"); break; } }
+    for(x=0;x<IOC_TERMS.length && hits.length<3;x++){ if(rec.blob.indexOf(IOC_TERMS[x])>=0) hits.push(IOC_TERMS[x]); }
+    if(hits.length){ score+=3; tags.push("IOC"); reasons.push("IOC hit: "+hits.join(", ")); }
+  }
+  if(rec.isPe && !rec.isOs && !trimStr(rec.prod) && !trimStr(rec.publisher) && !trimStr(rec.descr)){
+    score+=1; tags.push("NOMETA"); reasons.push("PE file with no product/publisher/description metadata"); }
+  if(rec.isPe && h1 && rec.msLink && rec.msFirst && (rec.msFirst-rec.msLink)>=0 && (rec.msFirst-rec.msLink)<=7*86400000){
+    score+=1; tags.push("FRESHPE"); reasons.push("Compiled (LinkDate "+rec.linkDate+") within 7 days of first-seen — freshly built binary in a user-writable path"); }
+  rec.tags=tags; rec.reasons=reasons; rec.score=score; rec.sus=(score>=3);   // >=3: Amcache indexes every scanned binary, so USERPATH alone (2) is not shade-worthy — combos are
+}
+function scorePrograms(){
+  var maxMs=0,i,p;
+  for(i=0;i<PROGS.length;i++){ p=PROGS[i];
+    p.msInst=msOf(p.installDate); p.dayInst=dayOf(p.installDate);
+    p.rootL=String(p.rootDir).toLowerCase();
+    p.blob=(p.name+" "+p.ver+" "+p.pub+" "+p.rootDir+" "+p.pid+" "+p.uninst+" "+p.src+" "+p.type).toLowerCase();
+    if(p.msInst>maxMs) maxMs=p.msInst;
+  }
+  var cut=maxMs?(maxMs-RECENT_DAYS*86400000):0;
+  for(i=0;i<PROGS.length;i++){ p=PROGS[i];
+    var tags=[], reasons=[], score=0;
+    p.recent=(cut && p.msInst>=cut);
+    if(isUserPath(p.rootL)){ score+=2; tags.push("USERPATH"); reasons.push("Installed under a user-writable path: "+p.rootDir); }
+    if(p.recent){ score+=1; tags.push("RECENT"); reasons.push("Installed in the last "+RECENT_DAYS+" days of this dataset: "+p.installDate); }
+    if(IOC_HASHES.length||IOC_TERMS.length){
+      var hits=[],x;
+      for(x=0;x<IOC_TERMS.length&&hits.length<3;x++){ if(p.blob.indexOf(IOC_TERMS[x])>=0) hits.push(IOC_TERMS[x]); }
+      if(hits.length){ score+=3; tags.push("IOC"); reasons.push("IOC hit: "+hits.join(", ")); }
+    }
+    p.tags=tags; p.reasons=reasons; p.score=score; p.sus=(score>=2);
+  }
+}
+function scoreDrivers(){
+  for(var i=0;i<DRIVERS.length;i++){ var d=DRIVERS[i];
+    var tags=[], reasons=[], score=0;
+    if(d.kernel && !d.inBox && !d.signed){
+      score+=3; tags.push("UNSIGNED-KMD");
+      reasons.push("Kernel-mode driver, not inbox, NOT reported signed"+(d.company?(" — company: "+d.company):"")+". NB Amcache under-reports signing on some catalog-signed Microsoft drivers (bth* etc.) — verify before calling it."); }
+    if(IOC_HASHES.length||IOC_TERMS.length){
+      var hits=[],x;
+      for(x=0;x<IOC_TERMS.length&&hits.length<3;x++){ if(d.blob.indexOf(IOC_TERMS[x])>=0) hits.push(IOC_TERMS[x]); }
+      if(hits.length){ score+=3; tags.push("IOC"); reasons.push("IOC hit: "+hits.join(", ")); }
+    }
+    d.tags=tags; d.reasons=reasons; d.score=score; d.sus=(score>=2);
+  }
+}
+
+/* ---------- aggregates / overview ---------- */
+function topList(obj,n){ var a=[],k; for(k in obj){ if(obj.hasOwnProperty(k)) a.push([k,obj[k]]); }
+  a.sort(function(x,y){ return y[1]-x[1]; }); return a.slice(0,n); }
+function stat(n,l){ return '<span class="stat"><span class="n">'+esc(n)+'</span><span class="l">'+esc(l)+'</span></span>'; }
+function bar(label,frac,val,q){
+  var lc=q?' lnk" data-q="'+esc(q):'';
+  return '<div class="brow"><span class="blab'+lc+'" title="'+esc(label)+'">'+esc(label)+'</span>'
+    +'<span class="btrack"><span class="bfill" style="width:'+(frac*100).toFixed(1)+'%"></span></span>'
+    +'<span class="bval">'+esc(val)+'</span></div>';
+}
+function listRow(label,val,q,cls){
+  var lc=q?' lnk" data-q="'+esc(q):'';
+  return '<div class="brow"><span class="blab'+lc+'" title="'+esc(label)+'" style="width:52%">'+esc(label)+'</span>'
+    +'<span class="bval" style="width:44%;'+(cls||"")+'">'+esc(val)+'</span></div>';
+}
+function fmtShortTs(s){ var m=String(s).match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/); return m?(m[1]+" "+m[2]):String(s); }
+function renderAmcAgg(rows){
+  var i, r;
+  var susN=0, iocN=0, assocN=0, minMs=0, maxMs=0, pubs={};
+  for(i=0;i<rows.length;i++){ r=rows[i];
+    if(r.sus) susN++;
+    if(hasTag(r,"IOC")) iocN++;
+    if(r.assoc) assocN++;
+    var pk=trimStr(r.publisher||r.prod)||"(no metadata)";
+    pubs[pk]=(pubs[pk]||0)+1;
+    if(r.msFirst){ if(!minMs||r.msFirst<minMs) minMs=r.msFirst; if(r.msFirst>maxMs) maxMs=r.msFirst; }
+  }
+  var rng=(minMs? (fmtShortTs(msToTs(minMs))+" → "+fmtShortTs(msToTs(maxMs))) : "—");
+  $("statbar").innerHTML=
+    stat(nf(rows.length),"file entries")+stat(nf(assocN)+" / "+nf(rows.length-assocN),"assoc / unassoc")+
+    stat(nf(PROGS.length),"programs")+stat(nf(susN),"suspicious")+
+    ((IOC_HASHES.length||IOC_TERMS.length)?stat(nf(iocN),"IOC hits"):"")+
+    '<span class="stat" style="min-width:260px"><span class="n" style="font-size:12px">'+esc(rng)+'</span><span class="l">first-seen range (UTC)</span></span>';
+  // col 1: newest first-seen — Amcache's highest-signal list
+  var byNew=rows.slice(0); byNew.sort(function(a,b){ return b.msFirst-a.msFirst; });
+  var h=""; for(i=0;i<byNew.length&&i<12;i++){ r=byNew[i]; h+=listRow(r.name, fmtShortTs(r.firstSeen), r.name); }
+  $("topNew").innerHTML=h||'<span class="muted">none</span>';
+  // col 2: top publisher / product ((no metadata) group filters the NOMETA category)
+  var top=topList(pubs,12), max=top.length?top[0][1]:1;
+  h="";
+  for(i=0;i<top.length;i++){ var lab=top[i][0], frac=max?top[i][1]/max:0;
+    if(lab==="(no metadata)"){
+      h+='<div class="brow"><span class="blab lnk" data-catq="nometa" title="entries with no publisher/product — click to filter No-metadata PE">'+esc(lab)+'</span>'
+        +'<span class="btrack"><span class="bfill" style="width:'+(frac*100).toFixed(1)+'%"></span></span>'
+        +'<span class="bval">'+esc(nf(top[i][1]))+'</span></div>';
+    } else h+=bar(lab, frac, nf(top[i][1]), lab);
+  }
+  $("topPubs").innerHTML=h||'<span class="muted">none</span>';
+  // col 3: suspicious, score-ranked
+  var sus=[]; for(i=0;i<rows.length;i++){ if(rows[i].sus) sus.push(rows[i]); }
+  sus.sort(function(a,b){ return b.score-a.score || b.msFirst-a.msFirst; });
+  h=""; for(i=0;i<sus.length&&i<12;i++){ r=sus[i];
+    h+=listRow(r.name+"  ["+r.tags.join(",")+"]", "score "+r.score, r.name, "color:#ff6b6b"); }
+  $("topSus").innerHTML=h||'<span class="ok">No suspicious entries</span>';
+}
+function msToTs(ms){ var d=new Date(ms); function p(x){return (x<10?"0":"")+x;}
+  return d.getUTCFullYear()+"-"+p(d.getUTCMonth()+1)+"-"+p(d.getUTCDate())+" "+p(d.getUTCHours())+":"+p(d.getUTCMinutes())+":"+p(d.getUTCSeconds()); }
+function hasTag(r,t){ for(var i=0;i<r.tags.length;i++){ if(r.tags[i]===t) return true; } return false; }
+
+/* ---------- file-entries table ---------- */
+var COLS=[
+  {h:"Tags", sk:function(r){return -r.score;}, cell:function(r){return '<td class="first">'+tagHtml(r)+'</td>';}},
+  {h:"Name", sk:function(r){return r.nameL;}, cell:function(r){return '<td class="mono lnk" data-q="'+esc(r.name)+'" title="'+esc(r.name)+'">'+esc(r.name)+'</td>';}},
+  {h:"Full path", sk:function(r){return r.fullPathL;}, cell:function(r){return '<td class="mono" title="'+esc(r.fullPath)+'">'+esc(r.fullPath)+'</td>';}},
+  {h:"First seen (UTC)", sk:function(r){return r.msFirst;}, cell:function(r){return '<td class="mono" title="FileKeyLastWriteTimestamp — approximates when the binary was first seen/scanned. Presence &ne; execution.">'+esc(r.firstSeen)+'</td>';}},
+  {h:"LinkDate (UTC)", sk:function(r){return r.msLink;}, cell:function(r){return '<td class="mono muted">'+esc(r.linkDate)+'</td>';}},
+  {h:"SHA1", sk:function(r){return r.sha1;}, cell:function(r){return '<td class="mono muted" title="'+esc(r.sha1)+' — click the row for a copyable hash">'+esc(r.sha1?r.sha1.substring(0,12)+"…":"")+'</td>';}},
+  {h:"Size", sk:function(r){return r.size;}, cell:function(r){return '<td class="mono" style="text-align:right">'+esc(nf(r.size))+'</td>';}},
+  {h:"Product", sk:function(r){return String(r.prod).toLowerCase();}, cell:function(r){return '<td class="muted" title="'+esc(r.prod)+'">'+esc(r.prod)+'</td>';}},
+  {h:"Publisher (program)", sk:function(r){return String(r.publisher).toLowerCase();}, cell:function(r){return '<td class="muted" title="'+esc(r.publisher+(r.progName?(" — "+r.progName):""))+'">'+esc(r.publisher)+'</td>';}},
+  {h:"Set", sk:function(r){return r.assoc?1:0;}, cell:function(r){return '<td class="muted">'+(r.assoc?"assoc":"unassoc")+'</td>';}}
+];
+function tagHtml(r){
+  var t="",i;
+  if(r.sus) t+='<span class="tag sus" title="'+esc(r.reasons.join("; "))+'">SUS '+r.score+'</span>';
+  for(i=0;i<r.tags.length;i++){ var g=r.tags[i], cls="gen";
+    if(g==="USERPATH") cls="usr"; else if(g==="LOLBIN") cls="lol"; else if(g==="RECENT"||g==="RANDOM") cls="rare";
+    else if(g==="IOC"||g==="MASQ") cls="ioc";
+    t+='<span class="tag '+cls+'" title="'+esc(r.reasons.join("; "))+'">'+esc(g)+'</span>'; }
+  return t;
+}
+function filteredPf(){
+  var out=[];
+  for(var i=0;i<ROWS.length;i++){
+    var r=ROWS[i];
+    if(CURCAT==="sus"&&!r.sus) continue;
+    if(CURCAT==="userpath"&&!hasTag(r,"USERPATH")) continue;
+    if(CURCAT==="lolbin"&&!hasTag(r,"LOLBIN")) continue;
+    if(CURCAT==="recent"&&!r.recent) continue;
+    if(CURCAT==="nometa"&&!hasTag(r,"NOMETA")) continue;
+    if(CURCAT==="ioc"&&!hasTag(r,"IOC")) continue;
+    if(DFROM&&(!r.dayFirst||r.dayFirst<DFROM)) continue;
+    if(DTO&&(!r.dayFirst||r.dayFirst>DTO)) continue;
+    if(QUERY){ if(r.blob.indexOf(QUERY)<0) continue; }
+    out.push(r);
+  }
+  return out;
+}
+function updateCatCounts(){
+  var c={all:0,sus:0,userpath:0,lolbin:0,recent:0,nometa:0,ioc:0,unsigned:0}, i;
+  if(VIEW==="progs"){ c.all=PROGS.length;
+    for(i=0;i<PROGS.length;i++){ var p=PROGS[i];
+      if(p.sus)c.sus++; if(hasTag(p,"USERPATH"))c.userpath++; if(p.recent)c.recent++; if(hasTag(p,"IOC"))c.ioc++; } }
+  else if(VIEW==="drv"){ c.all=DRIVERS.length;
+    for(i=0;i<DRIVERS.length;i++){ var d=DRIVERS[i];
+      if(d.sus)c.sus++; if(hasTag(d,"UNSIGNED-KMD"))c.unsigned++; if(hasTag(d,"IOC"))c.ioc++; } }
+  else { c.all=ROWS.length;
+    for(i=0;i<ROWS.length;i++){ var r=ROWS[i];
+      if(r.sus)c.sus++; if(hasTag(r,"USERPATH"))c.userpath++; if(hasTag(r,"LOLBIN"))c.lolbin++;
+      if(r.recent)c.recent++; if(hasTag(r,"NOMETA"))c.nometa++; if(hasTag(r,"IOC"))c.ioc++; } }
+  var names={all:"All",sus:"Suspicious",userpath:"User-path",lolbin:"LOLBIN",recent:"Recent",nometa:"No-metadata PE",ioc:"IOC hits",unsigned:"Unsigned drivers"};
+  var bs=$("pfCats").getElementsByTagName("button");
+  for(var j=0;j<bs.length;j++){ var k=bs[j].getAttribute("data-cat");
+    if(k) bs[j].innerHTML=names[k]+" ("+nf(c[k])+")"; }
+}
+function highlightCat(){
+  var bs=$("pfCats").getElementsByTagName("button");
+  for(var j=0;j<bs.length;j++){ if(bs[j].getAttribute("data-cat")) bs[j].className=(bs[j].getAttribute("data-cat")===CURCAT)?"btn on":"btn"; }
+}
+var CATSETS={files:{all:1,sus:1,userpath:1,lolbin:1,recent:1,nometa:1,ioc:1},
+             progs:{all:1,sus:1,userpath:1,recent:1,ioc:1},
+             drv:{all:1,sus:1,unsigned:1,ioc:1}};
+function setView(v){
+  VIEW=v;
+  $("vFiles").className=(v==="files")?"btn on":"btn";
+  $("vProgs").className=(v==="progs")?"btn on":"btn";
+  $("vDrv").className=(v==="drv")?"btn on":"btn";
+  $("tableTitle").innerHTML=(v==="progs")?"Program entries":((v==="drv")?"Driver binaries":"Amcache file entries");
+  var set=CATSETS[v], bs=$("pfCats").getElementsByTagName("button");
+  for(var j=0;j<bs.length;j++){ var k=bs[j].getAttribute("data-cat");
+    if(k) bs[j].style.display=set[k]?"":"none"; }
+  if(!set[CURCAT]) CURCAT="all";
+  highlightCat();
+  showEl("pfCards", v==="files");
+  closeDetail();
+  render();
+}
+var PCOLS=[
+  {h:"Tags", sk:function(p){return -p.score;}, cell:function(p){return '<td class="first">'+tagHtml(p)+'</td>';}},
+  {h:"Program", sk:function(p){return String(p.name).toLowerCase();}, cell:function(p){return '<td class="lnk" data-q="'+esc(p.name)+'" title="'+esc(p.name)+'">'+esc(p.name)+'</td>';}},
+  {h:"Version", sk:function(p){return String(p.ver).toLowerCase();}, cell:function(p){return '<td class="mono muted">'+esc(p.ver)+'</td>';}},
+  {h:"Publisher", sk:function(p){return String(p.pub).toLowerCase();}, cell:function(p){return '<td class="muted" title="'+esc(p.pub)+'">'+esc(p.pub)+'</td>';}},
+  {h:"Installed (UTC)", sk:function(p){return p.msInst;}, cell:function(p){return '<td class="mono" title="best of InstallDate / ArpLastModified / MSI">'+esc(p.installDate)+'</td>';}},
+  {h:"Root dir", sk:function(p){return p.rootL;}, cell:function(p){return '<td class="mono" title="'+esc(p.rootDir)+'">'+esc(p.rootDir)+'</td>';}},
+  {h:"Type", sk:function(p){return String(p.type).toLowerCase();}, cell:function(p){return '<td class="muted">'+esc(p.type)+'</td>';}},
+  {h:"Source", sk:function(p){return String(p.src).toLowerCase();}, cell:function(p){return '<td class="muted">'+esc(p.src)+'</td>';}},
+  {h:"File entries", sk:function(p){return p.nFiles;}, cell:function(p){return '<td class="mono" style="text-align:right">'+esc(nf(p.nFiles))+'</td>';}}
+];
+var DCOLS=[
+  {h:"Tags", sk:function(d){return -d.score;}, cell:function(d){return '<td class="first">'+tagHtml(d)+'</td>';}},
+  {h:"Driver", sk:function(d){return d.nameL;}, cell:function(d){return '<td class="mono lnk" data-q="'+esc(d.name)+'" title="'+esc(d.keyName)+'">'+esc(d.name)+'</td>';}},
+  {h:"Company", sk:function(d){return String(d.company).toLowerCase();}, cell:function(d){return '<td class="muted" title="'+esc(d.company)+'">'+esc(d.company)+'</td>';}},
+  {h:"Signed", sk:function(d){return d.signed?1:0;}, cell:function(d){return '<td class="mono'+(d.signed?'':' err')+'">'+esc(d.signedRaw||"?")+'</td>';}},
+  {h:"Kernel", sk:function(d){return d.kernel?1:0;}, cell:function(d){return '<td class="mono">'+(d.kernel?"True":"False")+'</td>';}},
+  {h:"InBox", sk:function(d){return d.inBox?1:0;}, cell:function(d){return '<td class="mono">'+(d.inBox?"True":"False")+'</td>';}},
+  {h:"Driver written (UTC)", sk:function(d){return d.msLW;}, cell:function(d){return '<td class="mono" title="DriverLastWriteTime — the DriverTimeStamp field is often bogus (hash-stamp) and shown only in the detail pane">'+esc(d.lastWrite)+'</td>';}},
+  {h:"Service", sk:function(d){return String(d.service).toLowerCase();}, cell:function(d){return '<td class="mono muted">'+esc(d.service)+'</td>';}},
+  {h:"Product", sk:function(d){return String(d.product).toLowerCase();}, cell:function(d){return '<td class="muted" title="'+esc(d.product)+'">'+esc(d.product)+'</td>';}}
+];
+function filteredProgs(){
+  var out=[];
+  for(var i=0;i<PROGS.length;i++){ var p=PROGS[i];
+    if(CURCAT==="sus"&&!p.sus) continue;
+    if(CURCAT==="userpath"&&!hasTag(p,"USERPATH")) continue;
+    if(CURCAT==="recent"&&!p.recent) continue;
+    if(CURCAT==="ioc"&&!hasTag(p,"IOC")) continue;
+    if(DFROM&&(!p.dayInst||p.dayInst<DFROM)) continue;
+    if(DTO&&(!p.dayInst||p.dayInst>DTO)) continue;
+    if(QUERY){ if(p.blob.indexOf(QUERY)<0) continue; }
+    out.push(p);
+  }
+  return out;
+}
+function filteredDrvs(){
+  var out=[];
+  for(var i=0;i<DRIVERS.length;i++){ var d=DRIVERS[i];
+    if(CURCAT==="sus"&&!d.sus) continue;
+    if(CURCAT==="unsigned"&&!hasTag(d,"UNSIGNED-KMD")) continue;
+    if(CURCAT==="ioc"&&!hasTag(d,"IOC")) continue;
+    if(DFROM&&(!d.dayLW||d.dayLW<DFROM)) continue;
+    if(DTO&&(!d.dayLW||d.dayLW>DTO)) continue;
+    if(QUERY){ if(d.blob.indexOf(QUERY)<0) continue; }
+    out.push(d);
+  }
+  return out;
+}
+function renderProgs(){
+  var rows=filteredProgs();
+  updateCatCounts();
+  var susN=0,upN=0,rcN=0,minMs=0,maxMs=0,i;
+  for(i=0;i<rows.length;i++){ var p=rows[i];
+    if(p.sus)susN++; if(hasTag(p,"USERPATH"))upN++; if(p.recent)rcN++;
+    if(p.msInst){ if(!minMs||p.msInst<minMs)minMs=p.msInst; if(p.msInst>maxMs)maxMs=p.msInst; } }
+  var rng=(minMs?(fmtShortTs(msToTs(minMs))+" → "+fmtShortTs(msToTs(maxMs))):"—");
+  $("statbar").innerHTML=stat(nf(rows.length),"programs")+stat(nf(upN),"user-path installs")+stat(nf(rcN),"recent installs")+stat(nf(susN),"suspicious")
+    +'<span class="stat" style="min-width:260px"><span class="n" style="font-size:12px">'+esc(rng)+'</span><span class="l">install range (UTC)</span></span>';
+  var sk=PCOLS[PSORTKEY].sk, dir=PSORTDIR;
+  rows.sort(function(a,b){ var x=sk(a),y=sk(b);
+    if(typeof x==="number"&&typeof y==="number") return (x-y)*dir;
+    x=String(x); y=String(y); return x<y?-dir:(x>y?dir:0); });
+  var shown=rows.length>MAXROWS?MAXROWS:rows.length;
+  var html="<thead><tr>";
+  for(var c=0;c<PCOLS.length;c++){ var ar=(PSORTKEY===c)?(PSORTDIR>0?" ▲":" ▼"):""; html+='<th data-k="'+c+'">'+esc(PCOLS[c].h)+ar+'</th>'; }
+  html+="</tr></thead><tbody>";
+  for(i=0;i<shown;i++){ var r=rows[i];
+    html+='<tr data-i="'+i+'"'+(r.sus?' class="sus"':'')+' style="cursor:pointer">';
+    for(var k=0;k<PCOLS.length;k++){ html+=PCOLS[k].cell(r); }
+    html+="</tr>"; }
+  html+="</tbody>";
+  $("tbl").innerHTML=html;
+  $("count").innerHTML=nf(rows.length)+" programs"+(shown<rows.length?(" (showing "+nf(shown)+")"):"");
+  var ths=$("tbl").getElementsByTagName("th");
+  for(var j=0;j<ths.length;j++){ ths[j].onclick=function(){ var kk=parseInt(this.getAttribute("data-k"),10);
+    if(PSORTKEY===kk) PSORTDIR*=-1; else { PSORTKEY=kk; PSORTDIR=1; } renderProgs(); }; }
+  applyFreeze();
+  window.__viewRows=rows;
+}
+function renderDrivers(){
+  var rows=filteredDrvs();
+  updateCatCounts();
+  var kmN=0,unN=0,ibN=0,susN=0,i;
+  for(i=0;i<rows.length;i++){ var d=rows[i];
+    if(d.kernel)kmN++; if(hasTag(d,"UNSIGNED-KMD"))unN++; if(d.inBox)ibN++; if(d.sus)susN++; }
+  $("statbar").innerHTML=stat(nf(rows.length),"drivers")+stat(nf(kmN),"kernel-mode")+stat(nf(ibN),"inbox")
+    +stat(nf(unN),"unsigned KMD")+stat(nf(susN),"suspicious");
+  var sk=DCOLS[DSORTKEY].sk, dir=DSORTDIR;
+  rows.sort(function(a,b){ var x=sk(a),y=sk(b);
+    if(typeof x==="number"&&typeof y==="number") return (x-y)*dir||b.msLW-a.msLW;
+    x=String(x); y=String(y); return x<y?-dir:(x>y?dir:0); });
+  var shown=rows.length>MAXROWS?MAXROWS:rows.length;
+  var html="<thead><tr>";
+  for(var c=0;c<DCOLS.length;c++){ var ar=(DSORTKEY===c)?(DSORTDIR>0?" ▲":" ▼"):""; html+='<th data-k="'+c+'">'+esc(DCOLS[c].h)+ar+'</th>'; }
+  html+="</tr></thead><tbody>";
+  for(i=0;i<shown;i++){ var r=rows[i];
+    html+='<tr data-i="'+i+'"'+(r.sus?' class="sus"':'')+' style="cursor:pointer">';
+    for(var k=0;k<DCOLS.length;k++){ html+=DCOLS[k].cell(r); }
+    html+="</tr>"; }
+  html+="</tbody>";
+  $("tbl").innerHTML=html;
+  $("count").innerHTML=nf(rows.length)+" drivers"+(shown<rows.length?(" (showing "+nf(shown)+")"):"");
+  var ths=$("tbl").getElementsByTagName("th");
+  for(var j=0;j<ths.length;j++){ ths[j].onclick=function(){ var kk=parseInt(this.getAttribute("data-k"),10);
+    if(DSORTKEY===kk) DSORTDIR*=-1; else { DSORTKEY=kk; DSORTDIR=1; } renderDrivers(); }; }
+  applyFreeze();
+  window.__viewRows=rows;
+}
+function render(){
+  if(MODE==="generic"){ renderGeneric(); return; }
+  if(VIEW==="progs"){ renderProgs(); return; }
+  if(VIEW==="drv"){ renderDrivers(); return; }
+  if(!ROWS.length) return;
+  var rows=filteredPf();
+  renderAmcAgg(rows);
+  updateCatCounts();
+  var sk=COLS[SORTKEY].sk, dir=SORTDIR;
+  rows.sort(function(a,b){ var x=sk(a),y=sk(b);
+    if(typeof x==="number"&&typeof y==="number") return (x-y)*dir;
+    x=String(x); y=String(y); return x<y?-dir:(x>y?dir:0); });
+  var shown=rows.length>MAXROWS?MAXROWS:rows.length;
+  var html="<thead><tr>";
+  for(var c=0;c<COLS.length;c++){
+    var arrow=(SORTKEY===c)?(SORTDIR>0?" ▲":" ▼"):"";
+    html+='<th data-k="'+c+'">'+esc(COLS[c].h)+arrow+'</th>';
+  }
+  html+="</tr></thead><tbody>";
+  for(var i=0;i<shown;i++){
+    var r=rows[i];
+    html+='<tr data-i="'+i+'"'+(r.sus?' class="sus"':'')+' style="cursor:pointer">';
+    for(var k=0;k<COLS.length;k++){ html+=COLS[k].cell(r); }
+    html+="</tr>";
+  }
+  html+="</tbody>";
+  $("tbl").innerHTML=html;
+  $("count").innerHTML=nf(rows.length)+" rows"+(shown<rows.length?(" (showing "+nf(shown)+")"):"");
+  wireHeaders();
+  applyFreeze();
+  window.__viewRows=rows;
+}
+function wireHeaders(){
+  var ths=$("tbl").getElementsByTagName("th");
+  for(var i=0;i<ths.length;i++){ ths[i].onclick=function(){
+    var k=parseInt(this.getAttribute("data-k"),10);
+    if(SORTKEY===k) SORTDIR*=-1; else { SORTKEY=k; SORTDIR=1; }
+    render();
+  }; }
+}
+function applyFreeze(){
+  var sc=$("tblScroll"); if(!sc) return;
+  var ths=$("tbl").getElementsByTagName("th"); var y=sc.scrollTop;
+  for(var i=0;i<ths.length;i++){ ths[i].style.top=y+"px"; }
+}
+
+/* ---------- detail pane ---------- */
+function renderDetail(rec){
+  DETREC=rec; DETKIND="file";
+  var h='<div class="mono" style="font-size:14px;margin-bottom:6px"><b>'+esc(rec.name)+'</b>'
+    +(rec.fullPath?('  <span class="muted">—</span>  '+esc(rec.fullPath)):'')+'</div>';
+  h+='<div style="margin-bottom:6px">'+tagHtml(rec)+'</div>';
+  if(rec.reasons.length){ h+='<div style="font-size:12px;color:#ff9b9b;margin-bottom:6px">';
+    for(var q=0;q<rec.reasons.length;q++) h+="&bull; "+esc(rec.reasons[q])+"<br>"; h+='</div>'; }
+  h+='<h3>File entry ('+(rec.assoc?"associated":"unassociated")+') — UTC</h3><div class="dl" style="max-height:220px">';
+  h+='<div class="mono">first seen (FileKeyLastWrite): '+esc(rec.firstSeen||"—")+'</div>';
+  h+='<div class="mono">LinkDate (compile time): '+esc(rec.linkDate||"—")+'</div>';
+  h+='<div class="mono">SHA1 (first 30 MB): <span class="lnk" id="detSha" title="click to copy">'+esc(rec.sha1||"—")+'</span></div>';
+  h+='<div class="mono">size '+esc(nf(rec.size))+' &middot; PE: '+(rec.isPe?"yes":"no")+' &middot; OS component: '+(rec.isOs?"yes":"no")+' &middot; binary type: '+esc(rec.binType||"—")+'</div>';
+  h+='<div class="mono">product: '+esc(rec.prod||"—")+' &middot; version: '+esc(rec.ver||"—")+'</div>';
+  h+='<div class="mono">description: '+esc(rec.descr||"—")+' &middot; USN: '+esc(rec.usn||"—")+'</div>';
+  h+='<div class="mono">ApplicationName: '+esc(rec.appName||"—")+' &middot; ProgramId: '+esc(rec.programId||"—")+'</div>';
+  h+='</div>';
+  var p=PROGBYID[rec.programId];
+  if(p){
+    h+='<h3>Linked program entry</h3><div class="dl" style="max-height:140px">';
+    h+='<div class="mono">'+esc(p.name||"(unnamed)")+'  v'+esc(p.ver||"?")+' &middot; '+esc(p.pub||"(no publisher)")+'</div>';
+    h+='<div class="mono">installed: '+esc(p.installDate||"—")+' (UTC) &middot; type: '+esc(p.type||"—")+' &middot; source: '+esc(p.src||"—")+'</div>';
+    h+='<div class="mono">root dir: '+esc(p.rootDir||"—")+'</div>';
+    if(p.uninst) h+='<div class="mono">uninstall: '+esc(p.uninst)+'</div>';
+    h+='<div class="mono muted">'+nf(p.nFiles)+' file entries reference this ProgramId</div>';
+    h+='</div>';
+  } else if(rec.programId){
+    h+='<div class="muted" style="font-size:11px;margin-top:4px">No matching program entry for this ProgramId.</div>';
+  }
+  $("detBody").innerHTML=h;
+  var ds=$("detSha");
+  if(ds && rec.sha1){ ds.onclick=function(){
+    try{ window.clipboardData.setData("Text", rec.sha1); setStatus("SHA1 copied — paste into VT / your IOC list","ok"); }
+    catch(eC){ setStatus("Copy failed: "+eC.message,"err"); } }; }
+  showEl("detailCard",true);
+}
+function renderProgDetail(p){
+  DETREC=p; DETKIND="prog";
+  var h='<div class="mono" style="font-size:14px;margin-bottom:6px"><b>'+esc(p.name||"(unnamed)")+'</b>  v'+esc(p.ver||"?")
+    +'  <span class="muted">—</span>  '+esc(p.pub||"(no publisher)")+'</div>';
+  h+='<div style="margin-bottom:6px">'+tagHtml(p)+'</div>';
+  if(p.reasons.length){ h+='<div style="font-size:12px;color:#ff9b9b;margin-bottom:6px">';
+    for(var q=0;q<p.reasons.length;q++) h+="&bull; "+esc(p.reasons[q])+"<br>"; h+='</div>'; }
+  h+='<h3>Program entry — UTC</h3><div class="dl" style="max-height:200px">';
+  h+='<div class="mono">installed: '+esc(p.installDate||"—")+' &middot; key written: '+esc(p.keyTs||"—")+'</div>';
+  h+='<div class="mono">root dir: '+esc(p.rootDir||"—")+'</div>';
+  h+='<div class="mono">type: '+esc(p.type||"—")+' &middot; source: '+esc(p.src||"—")+'</div>';
+  if(p.uninst) h+='<div class="mono">uninstall: '+esc(p.uninst)+'</div>';
+  h+='<div class="mono">ProgramId: '+esc(p.pid)+'</div>';
+  h+='</div>';
+  var files=[], i;
+  for(i=0;i<ROWS.length;i++){ if(ROWS[i].programId===p.pid) files.push(ROWS[i]); }
+  h+='<h3>File entries ('+nf(files.length)+')'
+    +(files.length?' <span class="lnk" id="detProgQ" style="float:right;font-weight:normal;text-transform:none;letter-spacing:0">show in File entries view</span>':'')+'</h3><div class="dl">';
+  for(i=0;i<files.length&&i<200;i++){ var f=files[i];
+    h+='<div class="mono'+(isUserPath(f.fullPathL)?' hl-user':'')+'" title="'+esc(f.fullPath)+'">'+esc(f.firstSeen)+'  '+esc(f.fullPath||f.name)+'</div>'; }
+  if(!files.length) h+='<span class="muted">(none — unassociated entries only reference this ProgramId if the program CSV lacks it)</span>';
+  h+='</div>';
+  $("detBody").innerHTML=h;
+  var dq=$("detProgQ");
+  if(dq){ dq.onclick=function(){ $("q").value=p.pid; QUERY=p.pid.toLowerCase(); setView("files"); }; }
+  showEl("detailCard",true);
+}
+function renderDrvDetail(d){
+  DETREC=d; DETKIND="drv";
+  var h='<div class="mono" style="font-size:14px;margin-bottom:6px"><b>'+esc(d.name)+'</b>'
+    +'  <span class="muted">—</span>  '+esc(d.keyName)+'</div>';
+  h+='<div style="margin-bottom:6px">'+tagHtml(d)+'</div>';
+  if(d.reasons.length){ h+='<div style="font-size:12px;color:#ff9b9b;margin-bottom:6px">';
+    for(var q=0;q<d.reasons.length;q++) h+="&bull; "+esc(d.reasons[q])+"<br>"; h+='</div>'; }
+  h+='<h3>Driver binary — UTC</h3><div class="dl" style="max-height:240px">';
+  h+='<div class="mono">signed: '+esc(d.signedRaw||"?")+' &middot; kernel-mode: '+(d.kernel?"True":"False")+' &middot; inbox: '+(d.inBox?"True":"False")+'</div>';
+  h+='<div class="mono">company: '+esc(d.company||"—")+' &middot; product: '+esc(d.product||"—")+' v'+esc(d.ver||"?")+'</div>';
+  h+='<div class="mono">driver written: '+esc(d.lastWrite||"—")+' &middot; key written: '+esc(d.keyTs||"—")+'</div>';
+  h+='<div class="mono">DriverTimeStamp: '+esc(d.drvTs||"—")+' <span class="muted">(often bogus on signed drivers — hash stamp, not a real date)</span></div>';
+  h+='<div class="mono">service: '+esc(d.service||"—")+' &middot; type: '+esc(d.dtype||"—")+' &middot; image size: '+esc(nf(d.imgSize))+' &middot; WDF: '+esc(d.wdf||"—")+'</div>';
+  h+='<div class="mono">inf: '+esc(d.inf||"—")+'</div>';
+  h+='<div class="mono">package: '+esc(d.pkg||"—")+'</div>';
+  h+='<div class="mono">checksum: '+esc(d.checksum||"—")+' &middot; driver id: '+esc(d.id||"—")+'</div>';
+  h+='</div>';
+  $("detBody").innerHTML=h;
+  showEl("detailCard",true);
+}
+function closeDetail(){ DETREC=null; showEl("detailCard",false); $("detBody").innerHTML=""; }
+function copyDetail(){
+  if(!DETREC){ setStatus("No record open","err"); return; }
+  var out=[];
+  if(DETKIND==="prog"){ var p=DETREC;
+    out.push((p.name||"(unnamed)")+" v"+(p.ver||"?")+"  —  "+(p.pub||"(no publisher)"));
+    out.push("tags: "+(p.tags.length?p.tags.join(", "):"none")+"  score "+p.score);
+    for(var q1=0;q1<p.reasons.length;q1++) out.push("  - "+p.reasons[q1]);
+    out.push("installed "+(p.installDate||"?")+" (UTC)  root "+(p.rootDir||"?")+"  type "+(p.type||"?")+"  source "+(p.src||"?"));
+    out.push("programId "+p.pid+"  file entries "+p.nFiles+(p.uninst?("  uninstall: "+p.uninst):""));
+  } else if(DETKIND==="drv"){ var d=DETREC;
+    out.push(d.name+"  —  "+d.keyName);
+    out.push("tags: "+(d.tags.length?d.tags.join(", "):"none")+"  score "+d.score);
+    for(var q2=0;q2<d.reasons.length;q2++) out.push("  - "+d.reasons[q2]);
+    out.push("signed "+(d.signedRaw||"?")+"  kernel "+(d.kernel?"True":"False")+"  inbox "+(d.inBox?"True":"False")+"  company "+(d.company||"-"));
+    out.push("driver written "+(d.lastWrite||"?")+" (UTC)  service "+(d.service||"-")+"  inf "+(d.inf||"-"));
+  } else { var r=DETREC;
+    out.push(r.name+"  —  "+(r.fullPath||"(no path)"));
+    out.push("tags: "+(r.tags.length?r.tags.join(", "):"none")+"  score "+r.score);
+    for(var q3=0;q3<r.reasons.length;q3++) out.push("  - "+r.reasons[q3]);
+    out.push("first seen "+r.firstSeen+" (UTC)  linkdate "+(r.linkDate||"?")+"  sha1 "+(r.sha1||"?")+"  size "+r.size);
+    out.push("product "+(r.prod||"-")+"  publisher "+(r.publisher||"-")+(r.progName?("  program "+r.progName):"")
+      +"  programId "+(r.programId||"-")+"  ["+(r.assoc?"associated":"unassociated")+"]");
+  }
+  try{ window.clipboardData.setData("Text", out.join("\r\n")); setStatus("Record copied to clipboard","ok"); }
+  catch(e){ setStatus("Copy failed: "+e.message,"err"); }
+}
+
+/* ---------- generic grid (non-prefetch CSVs, e.g. the Timeline) ---------- */
+function isNumStr(s){ s=trimStr(String(s)); return s!=="" && /^-?\d+(\.\d+)?$/.test(s); }
+function ingestGeneric(raw, head, srcLabel){
+  setMode("generic");
+  GHEAD=head; GROWS=[];
+  for(var i=1;i<raw.length;i++){ var rw=raw[i]; if(rw.length>=1 && !(rw.length===1 && rw[0]==="")) GROWS.push(rw); }
+  GSRC=srcLabel;
+  GSRCIDX=-1; for(var c=0;c<head.length;c++){ if(/^SourceFile(name)?$/i.test(trimStr(head[c]))){ GSRCIDX=c; break; } }
+  if(GSRCIDX>=0){ var sv=[]; for(var s=0;s<GROWS.length;s++) sv.push(GSRCIDX<GROWS[s].length?GROWS[s][GSRCIDX]:""); populateSourceFilter(distinctVals(sv)); }
+  else populateSourceFilter([]);
+  $("results").className="";
+  $("srcpill").innerHTML=nf(GROWS.length)+" rows &middot; "+esc(srcLabel)+" ("+GHEAD.length+" cols)";
+  QUERY=""; $("q").value=""; GSORTKEY=-1;
+  closeDetail();
+  setStatus("Loaded "+nf(GROWS.length)+" rows (generic table view)","ok");
+  renderGeneric();
+}
+function renderGeneric(){
+  if(!GHEAD) return;
+  var q=QUERY, rows=[];
+  for(var i=0;i<GROWS.length;i++){ var rw=GROWS[i];
+    if(SRCFILTER && GSRCIDX>=0 && (GSRCIDX<rw.length?rw[GSRCIDX]:"")!==SRCFILTER) continue;
+    if(q){ if(rw.join("  ").toLowerCase().indexOf(q)<0) continue; }
+    rows.push(rw);
+  }
+  if(GSORTKEY>=0){ var k=GSORTKEY, dir=GSORTDIR; rows=rows.slice(0);
+    rows.sort(function(a,b){ var x=(k<a.length?a[k]:""), y=(k<b.length?b[k]:"");
+      if(isNumStr(x)&&isNumStr(y)) return (parseFloat(x)-parseFloat(y))*dir;
+      x=String(x).toLowerCase(); y=String(y).toLowerCase(); return x<y?-dir:(x>y?dir:0); });
+  }
+  $("statbar").innerHTML=stat(nf(GROWS.length),"rows")+stat(nf(GHEAD.length),"columns")+stat(nf(rows.length),"matching")+
+    '<span class="stat" style="min-width:240px"><span class="n" style="font-size:12px">'+esc(GSRC)+'</span><span class="l">source</span></span>';
+  var shown=rows.length>MAXROWS?MAXROWS:rows.length;
+  var h="<thead><tr>";
+  for(var c=0;c<GHEAD.length;c++){ var ar=(GSORTKEY===c)?(GSORTDIR>0?" ▲":" ▼"):""; h+='<th data-k="'+c+'">'+esc(GHEAD[c])+ar+'</th>'; }
+  h+="</tr></thead><tbody>";
+  for(var r=0;r<shown;r++){ var row=rows[r]; h+="<tr>";
+    for(var c2=0;c2<GHEAD.length;c2++){ var v=(c2<row.length?row[c2]:""); h+='<td class="mono" title="'+esc(v)+'">'+esc(v)+'</td>'; }
+    h+="</tr>"; }
+  h+="</tbody>"; $("tbl").innerHTML=h;
+  $("count").innerHTML=nf(rows.length)+" rows"+(shown<rows.length?(" (showing "+nf(shown)+")"):"");
+  var ths=$("tbl").getElementsByTagName("th");
+  for(var i2=0;i2<ths.length;i2++){ ths[i2].onclick=function(){ var kk=parseInt(this.getAttribute("data-k"),10);
+    if(GSORTKEY===kk) GSORTDIR*=-1; else { GSORTKEY=kk; GSORTDIR=1; } renderGeneric(); }; }
+  applyFreeze();
+  window.__viewRows=rows;
+}
+function setMode(m){
+  MODE=m; var pf=(m==="pf");
+  showEl("pfCards",pf); showEl("pfCats",pf); showEl("pfDateCtl",pf); showEl("pfFoot",pf);
+  showEl("iocBtn",pf); showEl("viewToggle",pf);
+  if(!pf){ showEl("iocWrap",false); closeDetail(); }
+  if(pf) showEl("srcWrap",false);
+  $("ovTitle").innerHTML = pf ? "Overview &mdash; reflects active filters" : "Overview";
+  $("tableTitle").innerHTML = pf ? "Amcache file entries" : "Records";
+}
+
+/* ---------- export / copy ---------- */
+function cq(v){ v=(v==null)?"":String(v); return /[",\r\n]/.test(v)?('"'+v.replace(/"/g,'""')+'"'):v; }
+function nowStamp(){ var d=new Date(); function p(x){return (x<10?"0":"")+x;}
+  return d.getFullYear()+""+p(d.getMonth()+1)+p(d.getDate())+"_"+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds()); }
+function exportView(){
+  if(MODE==="generic"){ exportGeneric(); return; }
+  var rows=window.__viewRows||[];
+  if(!rows.length){ setStatus("Nothing to export","err"); return; }
+  var head, lines, i, r;
+  if(VIEW==="progs"){
+    head=["Name","Version","Publisher","Tags","Score","Suspicious","InstallDate_UTC","RootDirPath","Type","Source","UninstallString","ProgramId","FileEntryCount"];
+    lines=[head.join(",")];
+    for(i=0;i<rows.length;i++){ r=rows[i];
+      lines.push([cq(r.name),cq(r.ver),cq(r.pub),cq(r.tags.join("; ")),cq(r.score),cq(r.sus?"Yes":"No"),cq(r.installDate),
+        cq(r.rootDir),cq(r.type),cq(r.src),cq(r.uninst),cq(r.pid),cq(r.nFiles)].join(",")); }
+  } else if(VIEW==="drv"){
+    head=["DriverName","KeyName","Tags","Score","Suspicious","DriverSigned","DriverIsKernelMode","DriverInBox","DriverCompany","Product","ProductVersion","DriverLastWriteTime_UTC","DriverTimeStamp","Service","Inf","ImageSize"];
+    lines=[head.join(",")];
+    for(i=0;i<rows.length;i++){ r=rows[i];
+      lines.push([cq(r.name),cq(r.keyName),cq(r.tags.join("; ")),cq(r.score),cq(r.sus?"Yes":"No"),cq(r.signedRaw),
+        cq(r.kernel?"True":"False"),cq(r.inBox?"True":"False"),cq(r.company),cq(r.product),cq(r.ver),
+        cq(r.lastWrite),cq(r.drvTs),cq(r.service),cq(r.inf),cq(r.imgSize)].join(",")); }
+  } else {
+    head=["Name","FullPath","Tags","Score","Suspicious","FirstSeen_UTC","LinkDate_UTC","SHA1","SizeBytes","ProductName","Version","Publisher","ProgramName","InstallDate_UTC","ProgramId","EntrySet","IsPeFile","IsOsComponent"];
+    lines=[head.join(",")];
+    for(i=0;i<rows.length;i++){ r=rows[i];
+      lines.push([cq(r.name),cq(r.fullPath),cq(r.tags.join("; ")),cq(r.score),cq(r.sus?"Yes":"No"),cq(r.firstSeen),cq(r.linkDate),
+        cq(r.sha1),cq(r.size),cq(r.prod),cq(r.ver),cq(r.publisher),cq(r.progName),cq(r.installDate),cq(r.programId),
+        cq(r.assoc?"associated":"unassociated"),cq(r.isPe?"True":"False"),cq(r.isOs?"True":"False")].join(",")); }
+  }
+  var dir=LASTOUTDIR||$("outDir").value;
+  var path=dir+"\\filtered_export_"+nowStamp()+".csv";
+  try{ writeUtf8(path, lines.join("\r\n")); setStatus("Exported "+nf(rows.length)+" rows → "+path,"ok"); appendLog("Exported: "+path); }
+  catch(e){ setStatus("Export failed: "+e.message,"err"); }
+}
+function exportGeneric(){
+  var rows=window.__viewRows||[];
+  if(!GHEAD||!rows.length){ setStatus("Nothing to export","err"); return; }
+  var lines=[]; var hd=[]; for(var c=0;c<GHEAD.length;c++) hd.push(cq(GHEAD[c])); lines.push(hd.join(","));
+  for(var i=0;i<rows.length;i++){ var rw=rows[i]; var cells=[]; for(var c2=0;c2<GHEAD.length;c2++) cells.push(cq(c2<rw.length?rw[c2]:"")); lines.push(cells.join(",")); }
+  var dir=LASTOUTDIR||$("outDir").value;
+  var path=dir+"\\filtered_export_"+nowStamp()+".csv";
+  try{ writeUtf8(path, lines.join("\r\n")); setStatus("Exported "+nf(rows.length)+" rows → "+path,"ok"); appendLog("Exported: "+path); }
+  catch(e){ setStatus("Export failed: "+e.message,"err"); }
+}
+function copyNotes(){
+  if(MODE==="generic"){
+    var grows=(window.__viewRows||[]).slice(0,500); if(!GHEAD||!grows.length){ setStatus("Nothing to copy","err"); return; }
+    var gout=[GHEAD.join("\t")];
+    for(var g=0;g<grows.length;g++) gout.push(grows[g].join("\t"));
+    try{ window.clipboardData.setData("Text", gout.join("\r\n")); setStatus("Copied "+grows.length+" rows (TSV)","ok"); }
+    catch(eg){ setStatus("Copy failed: "+eg.message,"err"); }
+    return;
+  }
+  var rows=(window.__viewRows||[]).slice(0,500);
+  if(!rows.length){ setStatus("Nothing to copy","err"); return; }
+  var out=[], i, r;
+  if(VIEW==="progs"){
+    for(i=0;i<rows.length;i++){ r=rows[i];
+      out.push((r.installDate||"?")+" | "+r.name+" v"+(r.ver||"?")+" | "+(r.pub||"?")+" | "+(r.rootDir||"?")
+        +(r.tags.length?(" | "+r.tags.join(",")+" (score "+r.score+")"):"")); }
+  } else if(VIEW==="drv"){
+    for(i=0;i<rows.length;i++){ r=rows[i];
+      out.push((r.lastWrite||"?")+" | "+r.name+" | "+(r.company||"?")+" | signed="+(r.signedRaw||"?")+" kernel="+(r.kernel?"T":"F")+" inbox="+(r.inBox?"T":"F")
+        +(r.tags.length?(" | "+r.tags.join(",")+" (score "+r.score+")"):"")); }
+  } else {
+    for(i=0;i<rows.length;i++){ r=rows[i];
+      out.push(r.firstSeen+" | "+r.name+" | "+(r.fullPath||"?")+" | sha1="+(r.sha1||"?")
+        +(r.tags.length?(" | "+r.tags.join(",")+" (score "+r.score+")"):"")
+        +(r.reasons.length?(" | "+r.reasons.join("; ")):"")); }
+  }
+  try{ window.clipboardData.setData("Text", out.join("\r\n"));
+    setStatus("Copied "+out.length+" rows to clipboard","ok"); }
+  catch(e){ setStatus("Copy failed: "+e.message,"err"); }
+}
+
+/* ---------- IOC list ---------- */
+function applyIocs(){
+  var t=$("iocBox").value, parts=String(t).split(/[\r\n,;]+/);
+  IOC_HASHES=[]; IOC_TERMS=[];
+  for(var i=0;i<parts.length;i++){ var s=trimStr(parts[i]).toLowerCase(); if(!s) continue;
+    if(/^[0-9a-f]{40}$/.test(s)) IOC_HASHES.push(s); else IOC_TERMS.push(s); }
+  var nAct=IOC_HASHES.length+IOC_TERMS.length;
+  $("iocInfo").innerHTML=nAct?(nf(IOC_TERMS.length)+" keyword(s) + "+nf(IOC_HASHES.length)+" SHA1(s) active"):"no terms";
+  if(MODE==="pf"&&ROWS.length){ rescoreAll(); render(); if(DETREC) renderDetail(DETREC); }
+  setStatus(nAct?("IOC list applied — "+IOC_TERMS.length+" keyword(s) + "+IOC_HASHES.length+" SHA1(s), records rescored"):"IOC list cleared","ok");
+}
+
+/* ---------- wiring ---------- */
+function init(){
+  try{ window.resizeTo(1320,900); }catch(e){}
+  $("appver").innerHTML="&middot; v"+APP_VERSION;
+  try{ document.title="AmcacheParser Wrapper v"+APP_VERSION; }catch(e){}
+  $("tblScroll").onscroll=applyFreeze;
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  // no default input: the live hive is locked, so the normal flow is Browse → a collected Amcache.hve
+  $("pfPath").value="";
+  $("pfPath").title="Path to a collected Amcache.hve. The live "+LIVE_HIVE+" is locked while Windows runs — snapshot it first (esentutl /y /vss, elevated).";
+  // default output = "Exported CSVs" next to the .hta (create it if missing); fall back to temp if app folder unknown
+  var expBase=htaFolder()||fso.GetSpecialFolder(2)+"";
+  var expDir=expBase+"\\Exported CSVs";
+  try{ if(!fso.FolderExists(expDir)) fso.CreateFolder(expDir); }catch(e){}
+  $("outDir").value=expDir;
+
+  var zoom=0.9;
+  $("fup").onclick=function(){ zoom=Math.min(zoom+0.1,2.6); document.body.style.zoom=zoom; };
+  $("fdown").onclick=function(){ zoom=Math.max(zoom-0.1,0.5); document.body.style.zoom=zoom; };
+
+  $("verBtn").onclick=checkVersion;
+  $("updBtn").onclick=downloadLatest;
+  $("openDirBtn").onclick=openDir;
+  $("procBtn").onclick=processPf;
+  $("loadSelBtn").onclick=function(){ var v=$("producedSel").value; if(!v) return;
+    setStatus("Loading "+v,"muted"); window.setTimeout(function(){ loadCsvFile(v); },50); };
+  $("browseBtn").onclick=function(){ $("pfPick").click(); };
+  $("pfPick").onchange=function(){ if(this.value) $("pfPath").value=this.value; };
+  $("liveBtn").onclick=snapshotLive;
+  $("browseDirBtn").onclick=function(){
+    try{
+      var sha=new ActiveXObject("Shell.Application");
+      var fld=sha.BrowseForFolder(0,"Select a collection folder — it is searched recursively for Amcache.hve.",0x51);
+      if(fld){ var p=""; try{ p=fld.Self.Path+""; }catch(e2){}
+        if(/^[a-z]:\\|^\\\\/i.test(p)) $("pfPath").value=p;
+        else if(p) setStatus("That selection has no filesystem path — pick a real folder.","err"); }
+    }catch(e){ setStatus("Folder picker unavailable: "+e.message,"err"); }
+  };
+  $("useHiveBtn").onclick=function(){ var v=$("hiveSel").value; if(!v) return;
+    $("pfPath").value=v; showEl("hiveRow",false); processPf(); };
+  $("loadBtn").onclick=function(){ $("csvPick").click(); };
+  $("csvPick").onchange=function(){ if(this.value){ setStatus("Loading "+this.value,"muted"); loadCsvFile(this.value); } };
+  $("logToggle").onclick=function(){ var l=$("log");
+    if(l.style.display==="none"||!l.style.display){
+      if(!trimStr(l.innerHTML.replace(/<[^>]*>/g,""))){ l.innerHTML='<span class="muted">(empty — AmcacheParser output appears here after a run finishes. While a run is in progress a console window shows live progress.)</span>'; l.setAttribute("data-ph","1"); }
+      l.style.display="block"; this.innerHTML="Hide log";
+    } else { l.style.display="none"; this.innerHTML="Show log"; } };
+
+  var catBtns=$("pfCats").getElementsByTagName("button");
+  for(var i=0;i<catBtns.length;i++){ if(catBtns[i].getAttribute("data-cat")){ catBtns[i].onclick=function(){
+    CURCAT=this.getAttribute("data-cat"); highlightCat(); render();
+  }; } }
+
+  $("q").onkeyup=function(){ if(qTimer) window.clearTimeout(qTimer);
+    qTimer=window.setTimeout(function(){ QUERY=trimStr($("q").value).toLowerCase(); render(); },150); };
+  $("dfrom").onchange=function(){ DFROM=dayNum(this.value); render(); };
+  $("dto").onchange=function(){ DTO=dayNum(this.value); render(); };
+  $("srcSel").onchange=function(){ SRCFILTER=this.value; render(); };
+  $("clearBtn").onclick=function(){ $("q").value="";$("dfrom").value="";$("dto").value="";$("srcSel").value="";
+    QUERY="";DFROM=0;DTO=0;SRCFILTER="";CURCAT="all"; highlightCat(); render(); };
+  $("exportBtn").onclick=exportView;
+  $("copyBtn").onclick=copyNotes;
+
+  $("iocBtn").onclick=function(){ var w=$("iocWrap"); showEl("iocWrap", /\bhide\b/.test(w.className)); };
+  $("iocApply").onclick=applyIocs;
+  $("iocLoad").onclick=function(){ $("iocPick").click(); };
+  $("iocPick").onchange=function(){ if(this.value){
+    try{ $("iocBox").value=readUtf8(this.value); applyIocs(); }
+    catch(e){ setStatus("Could not read IOC file: "+e.message,"err"); } } };
+  $("vFiles").onclick=function(){ setView("files"); };
+  $("vProgs").onclick=function(){ setView("progs"); };
+  $("vDrv").onclick=function(){ setView("drv"); };
+  $("detClose").onclick=closeDetail;
+  $("detCopy").onclick=copyDetail;
+
+  /* click delegation: data-q anywhere → search filter; pf table row → detail pane */
+  document.onclick=function(e){ e=e||window.event; var t=e.target||e.srcElement;
+    var dc=t&&t.getAttribute?t.getAttribute("data-catq"):null;
+    if(dc){ CURCAT=dc; highlightCat(); render(); return; }
+    var q=t&&t.getAttribute?t.getAttribute("data-q"):null;
+    if(q){ $("q").value=q; QUERY=q.toLowerCase(); render(); return; }
+    if(MODE!=="pf") return;
+    var n=t;
+    while(n && n.tagName!=="TR"){ n=n.parentNode; if(n&&n.tagName==="TABLE") { n=null; break; } }
+    if(n && n.getAttribute && n.getAttribute("data-i")!=null && n.getAttribute("data-i")!==""){
+      var ix=parseInt(n.getAttribute("data-i"),10);
+      var rows=window.__viewRows||[];
+      if(ix>=0&&ix<rows.length){
+        var rr=rows[ix];
+        if(VIEW==="progs") renderProgDetail(rr); else if(VIEW==="drv") renderDrvDetail(rr); else renderDetail(rr);
+        var trs=$("tbl").getElementsByTagName("tr");
+        for(var z=0;z<trs.length;z++){ if(trs[z].getAttribute("data-i")!=null){
+          var zi=parseInt(trs[z].getAttribute("data-i"),10);
+          var zr=rows[zi]||null;
+          trs[z].className = (zi===ix) ? (((zr&&zr.sus)?"sus ":"")+"sel") : ((zr&&zr.sus)?"sus":""); } }
+      }
+    }
+  };
+
+  evaluateTooling(true);
+  if(isNetworkPath(htaFolder()))
+    appendLog("Heads-up: this app is running from a network location ("+htaFolder()+"). Windows zone policy may block the UTF-8 file reader there; the app falls back to ANSI IO automatically, but for full fidelity copy the folder to a local path (e.g. C:\\Tools\\AmcacheParser).");
+}
+function isNetworkPath(p){
+  try{ if(/^\\\\/.test(p)) return true;
+    var fso=new ActiveXObject("Scripting.FileSystemObject");
+    return fso.GetDrive(fso.GetDriveName(p)).DriveType===3;   // 3 = Remote
+  }catch(e){ return false; }
+}
+function dayNum(s){ if(!s) return 0; var m=String(s).match(/(\d{4})-(\d{1,2})-(\d{1,2})/); if(!m) return 0;
+  function p(x){ x=String(x); return x.length<2?("0"+x):x; }
+  return Number(m[1]+p(m[2])+p(m[3])); }
+
+window.onload=init;
+</script>
+</body>
+</html>

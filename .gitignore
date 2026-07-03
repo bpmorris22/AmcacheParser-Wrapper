@@ -1,0 +1,12 @@
+# never publish case data or tool binaries
+*.csv
+Exported CSVs/
+LiveSnapshot/
+AmcacheParser.exe
+AmcacheParser.dll
+AmcacheParser.runtimeconfig.json
+*.log
+*.hve
+*.hve.LOG1
+*.hve.LOG2
+*.zip
