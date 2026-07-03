@@ -6,6 +6,10 @@ No install, no dependencies, no framework: one `.hta` file that runs on any Wind
 
 Sibling of [PECmd-Wrapper](https://github.com/bpmorris22/PECmd-Wrapper), [SrumECmd-Wrapper](https://github.com/bpmorris22/SrumECmd-Wrapper) and [SQLECmd-Wrapper](https://github.com/bpmorris22/SQLECmd-Wrapper) — same tooling, same viewer, deliberately complementary artifacts: Amcache carries **SHA1 + compile date + publisher metadata** that prefetch lacks; prefetch carries the run counts and timestamps that Amcache lacks.
 
+![Control panel](images/control-panel.jpg)
+
+![Analysis view](images/analysis-screen.jpg)
+
 ## Features
 
 - **Runs AmcacheParser for you** — `-i` (associated file entries) and `--nl` (skip transaction-log replay) switches, output to timestamped CSVs, asynchronously in a visible console so the UI never freezes.
