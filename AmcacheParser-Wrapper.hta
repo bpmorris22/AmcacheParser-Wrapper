@@ -154,6 +154,8 @@
       <select id="hiveSel" style="min-width:70%"></select>
       <button class="btn primary" id="useHiveBtn">Use selected &rarr; process</button>
     </div>
+    <label class="fld" title="Required before processing. Guessed from the input path (Collection-<host>-… segments, or this machine for live paths) — overwrite it if the guess is wrong.">Target hostname (required) &mdash; names the output folder _Processed\&lt;host&gt;\AmcacheParser next to this app</label>
+    <input class="txt" id="hostName" value="" style="width:260px" placeholder="e.g. LT-2738RQ3">
     <label class="fld">CSV output directory</label>
     <input class="txt wide" id="outDir" value="">
     <button class="btn" id="openDirBtn">Open folder</button>
@@ -246,7 +248,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.2.0";
+var APP_VERSION = "1.3.0";
 var KNOWN_LATEST_AMCP = "2026.5.0";                                            // baseline as of 2026-07-03 (live scrape verified)
 var AMCP_ZIP_URL = "https://download.ericzimmermanstools.com/net9/AmcacheParser.zip";  // official EZ mirror (.NET 9 build)
 var AMCP_PAGE = "https://ericzimmerman.github.io/";                            // for live latest-version lookup
@@ -597,6 +599,7 @@ function snapshotLive(){
     appendLog("--- esentutl output ---\n"+lg);
     if(fileExists(dst+"\\Amcache.hve")){
       $("pfPath").value=dst+"\\Amcache.hve";
+      hostGuessFrom(LIVE_HIVE);   // snapshot of THIS machine's live hive → guess this computer's name
       var haveLogs=fileExists(dst+"\\Amcache.hve.LOG1")&&fileExists(dst+"\\Amcache.hve.LOG2");
       setStatus("Live hive snapshotted to "+dst+(haveLogs?"":" — transaction logs did NOT copy; parsing may miss the newest entries")+" — click 'Process → analyze'.","ok");
     } else {
@@ -608,8 +611,43 @@ function snapshotLive(){
   window.setTimeout(function(){ pollDone(ctx); }, 1000);
 }
 
+/* ---------- target hostname + _Processed output convention (family, 2026-07-06) ----------
+   All processed output lands in <appFolder>\_Processed\<Hostname>\<AppName>\ so the
+   Artifact-Finder (and the operator) can see per-host state at a glance. The hostname field is
+   REQUIRED before processing (not for just viewing CSVs). Guess order: Collection-<host>-<date>
+   segment in the input path → \_Processed\<host>\ in a CLI-passed outDir → live-machine paths
+   (X:\Windows / X:\Users → this computer's name). User-typed values are never overwritten. */
+var APP_NAME="AmcacheParser";
+var HOST_TOUCHED=false, OUT_TOUCHED=false;
+function sanitHost(s){ return String(s).replace(/[^A-Za-z0-9._\-]/g,"-").replace(/^[\-.]+|[\-.]+$/g,""); }
+function guessHost(p){
+  p=String(p||"");
+  var m=p.match(/Collection-([A-Za-z0-9][A-Za-z0-9\-_\.]*?)-\d{4}-\d{2}-\d{2}/i); if(m) return m[1];
+  m=p.match(/[\\\/]_Processed[\\\/]([^\\\/]+)[\\\/]/i); if(m) return m[1];
+  if(/^[a-z]:\\(windows|users)(\\|$)/i.test(p)){ try{ return new ActiveXObject("WScript.Network").ComputerName+""; }catch(e){} }
+  return "";
+}
+function defaultOutDir(){
+  var h=sanitHost($("hostName").value); if(!h) return "";
+  var base=htaFolder(); if(!base){ try{ base=new ActiveXObject("Scripting.FileSystemObject").GetSpecialFolder(2)+""; }catch(e){ return ""; } }
+  return base+"\\_Processed\\"+h+"\\"+APP_NAME;
+}
+function syncOutDir(){ if(OUT_TOUCHED) return; var d=defaultOutDir(); if(d) $("outDir").value=d; }
+function hostGuessFrom(p){
+  if(!HOST_TOUCHED || !trimStr($("hostName").value)){ var g=guessHost(p); if(g) $("hostName").value=sanitHost(g); }
+  syncOutDir();
+}
+function requireHost(){
+  var h=sanitHost($("hostName").value);
+  if(!h){ setStatus("Target hostname is required — it names the output folder _Processed\\<host>\\"+APP_NAME+". Type the host this artifact came from, then process again.","err");
+    try{ $("hostName").focus(); }catch(e){} return ""; }
+  if(!trimStr($("outDir").value)) syncOutDir();
+  return h;
+}
+
 function processPf(){
   var inp=$("pfPath").value;
+  if(!requireHost()) return;
   var outdir=$("outDir").value;
   var fso=new ActiveXObject("Scripting.FileSystemObject");
   showEl("hiveRow",false);
@@ -1700,11 +1738,9 @@ function init(){
   // no default input: the live hive is locked, so the normal flow is Browse → a collected Amcache.hve
   $("pfPath").value="";
   $("pfPath").title="Path to a collected Amcache.hve. The live "+LIVE_HIVE+" is locked while Windows runs — snapshot it first (esentutl /y /vss, elevated).";
-  // default output = "Exported CSVs" next to the .hta (create it if missing); fall back to temp if app folder unknown
-  var expBase=htaFolder()||fso.GetSpecialFolder(2)+"";
-  var expDir=expBase+"\\Exported CSVs";
-  try{ if(!fso.FolderExists(expDir)) fso.CreateFolder(expDir); }catch(e){}
-  $("outDir").value=expDir;
+  // default output follows the target hostname: _Processed\<host>\AmcacheParser next to the .hta
+  $("hostName").onkeyup=function(){ HOST_TOUCHED=true; syncOutDir(); };
+  $("outDir").onkeyup=function(){ OUT_TOUCHED=true; };
 
   var zoom=0.9;
   var zContent=$("content");
@@ -1721,19 +1757,19 @@ function init(){
   $("loadSelBtn").onclick=function(){ var v=$("producedSel").value; if(!v) return;
     setStatus("Loading "+v,"muted"); window.setTimeout(function(){ loadCsvFile(v); },50); };
   $("browseBtn").onclick=function(){ $("pfPick").click(); };
-  $("pfPick").onchange=function(){ if(this.value) $("pfPath").value=this.value; };
+  $("pfPick").onchange=function(){ if(this.value){ var v=this.value; $("pfPath").value=v; hostGuessFrom(v); } };
   $("liveBtn").onclick=snapshotLive;
   $("browseDirBtn").onclick=function(){
     try{
       var sha=new ActiveXObject("Shell.Application");
       var fld=sha.BrowseForFolder(0,"Select a collection folder — it is searched recursively for Amcache.hve.",0x51);
       if(fld){ var p=""; try{ p=fld.Self.Path+""; }catch(e2){}
-        if(/^[a-z]:\\|^\\\\/i.test(p)) $("pfPath").value=p;
+        if(/^[a-z]:\\|^\\\\/i.test(p)){ $("pfPath").value=p; hostGuessFrom(p); }
         else if(p) setStatus("That selection has no filesystem path — pick a real folder.","err"); }
     }catch(e){ setStatus("Folder picker unavailable: "+e.message,"err"); }
   };
   $("useHiveBtn").onclick=function(){ var v=$("hiveSel").value; if(!v) return;
-    $("pfPath").value=v; showEl("hiveRow",false); processPf(); };
+    $("pfPath").value=v; hostGuessFrom(v); showEl("hiveRow",false); processPf(); };
   $("loadBtn").onclick=function(){ $("csvPick").click(); };
   $("csvPick").onchange=function(){ if(this.value){ setStatus("Loading "+this.value,"muted"); loadCsvFile(this.value); } };
   $("logToggle").onclick=function(){ var l=$("log");
@@ -1849,7 +1885,8 @@ function applyCli(cli){ if(!cli.input) return false;
   if(/\.csv$/i.test(cli.input) && fso.FileExists(cli.input)){ appendLog("CLI: loading CSV "+cli.input); window.setTimeout(function(){ loadCsvFile(cli.input); },60); return true; }
   if(fso.FolderExists(cli.input) || fso.FileExists(cli.input)){ $("pfPath").value=cli.input; }
   else { setStatus("CLI input not found: "+cli.input,"err"); appendLog("CLI input not found: "+cli.input); return false; }
-  if(cli.outDir) $("outDir").value=cli.outDir;
+  if(cli.outDir){ $("outDir").value=cli.outDir; OUT_TOUCHED=true; hostGuessFrom(cli.outDir); }
+  else hostGuessFrom(cli.input);
   if(cli.auto){ appendLog("CLI: /auto — processing "+cli.input); window.setTimeout(function(){ processPf(); },200); }
   else setStatus("CLI: input prefilled — click 'Process → analyze' to run.","muted");
   return true; }
@@ -1927,6 +1964,7 @@ window.onload=function(){ init(); try{ window.setTimeout(checkSelfUpdate,600); }
     <ul>
       <li><code>&lt;input&gt;</code> — a <code>.csv</code> (auto-loads) or an <code>Amcache.hve</code> file / collection directory (prefilled; processed with <code>/auto</code>).</li>
       <li><code>&lt;outDir&gt;</code> — CSV output directory (optional). &nbsp; <code>/auto</code> — process immediately.</li>
+      <li><b>Target hostname</b> is required before processing — it names the output folder <code>_Processed\&lt;host&gt;\AmcacheParser</code> next to this app (family convention shared with the Artifact-Finder). It is guessed from <code>Collection-&lt;host&gt;-…</code> paths, a passed <code>_Processed\&lt;host&gt;\</code> outDir, or this machine's name for live paths — overwrite the guess if it's wrong.</li>
     </ul>
     <h3>Notes</h3>
     <ul>
