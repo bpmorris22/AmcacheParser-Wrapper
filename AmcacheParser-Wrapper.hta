@@ -248,7 +248,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.4.0";
+var APP_VERSION = "1.5.0";
 var KNOWN_LATEST_AMCP = "2026.5.0";                                            // baseline as of 2026-07-03 (live scrape verified)
 var AMCP_ZIP_URL = "https://download.ericzimmermanstools.com/net9/AmcacheParser.zip";  // official EZ mirror (.NET 9 build)
 var AMCP_PAGE = "https://ericzimmerman.github.io/";                            // for live latest-version lookup
@@ -684,7 +684,39 @@ function writeRunInfo(outdir, input, freshFiles){
     arr.push({app:APP_NAME, appVersion:APP_VERSION, host:sanitHost($("hostName").value),
               input:String(input||""), finishedUtc:iso, files:names});
     writeUtf8(p, JSON.stringify(arr,null,2));
+    RUNINFO_LAST={path:p, iso:iso};
   }catch(e){}
+}
+var RUNINFO_LAST=null;   // the entry writeRunInfo just appended — patched with a triage summary after the auto-load
+function patchRunInfoSummary(summary){
+  /* second-phase runinfo write (family, 2026-07-07): the scored rows only exist after the
+     auto-load that follows a run, so the headline triage numbers are patched onto the entry
+     writeRunInfo appended moments earlier. The Artifact-Finder renders these in its
+     per-host triage summary. Best-effort — a missing summary just shows as counts-only. */
+  try{
+    if(!RUNINFO_LAST || !summary) return;
+    var arr=JSON.parse(readUtf8(RUNINFO_LAST.path));
+    if(!arr || arr.length==null) return;
+    for(var i=arr.length-1;i>=0;i--){ var e=arr[i];
+      if(e && e.app===APP_NAME && e.finishedUtc===RUNINFO_LAST.iso){ e.summary=summary; break; } }
+    writeUtf8(RUNINFO_LAST.path, JSON.stringify(arr,null,2));
+  }catch(e){}
+}
+function buildRunSummary(){
+  /* headline triage numbers from the scored file-entry records: entries, wrapper-flagged count,
+     max score, top-3 "name (score)". "Flagged" uses this app's own suspicion threshold
+     (rec.sus = score>=3 — Amcache indexes every scanned binary, so the bar is higher than PECmd's). */
+  try{
+    if(!ROWS.length) return null;
+    var flagged=0, maxScore=0, top=[], i;
+    for(i=0;i<ROWS.length;i++){ var r=ROWS[i];
+      if(r.score>maxScore) maxScore=r.score;
+      if(r.sus) flagged++; }
+    var sorted=ROWS.slice(0);
+    sorted.sort(function(a,b){ return b.score-a.score; });
+    for(i=0;i<sorted.length && top.length<3;i++){ if(sorted[i].score>0) top.push(sorted[i].name+" ("+sorted[i].score+")"); }
+    return {entries:ROWS.length, flagged:flagged, maxScore:maxScore, top:top};
+  }catch(e){ return null; }
 }
 
 function processPf(){
@@ -767,6 +799,7 @@ function processPfDone(log,outdir,before){
   try{ $("producedSel").value=main.path; }catch(e){}
   setStatus("Produced "+fresh.length+" CSV(s); loaded "+main.name+". Pick the others from 'Produced CSVs'."+errNote,"ok");
   loadCsvFile(main.path);
+  patchRunInfoSummary(buildRunSummary());   // rows are scored now — add the triage headline to the runinfo entry
 }
 function csvNameSet(dir){ var o={}, l=listCsvFiles(dir); for(var i=0;i<l.length;i++) o[l[i].name]=true; return o; }
 function listCsvFiles(dir){
@@ -2010,7 +2043,7 @@ window.onload=function(){ init(); try{ window.setTimeout(checkSelfUpdate,600); }
       <li><code>&lt;outDir&gt;</code> — CSV output directory (optional). &nbsp; <code>/auto</code> — process immediately.</li>
       <li><b>Target hostname</b> is required before processing — it names the output folder <code>_Processed\&lt;host&gt;\AmcacheParser</code> next to this app (family convention shared with the Artifact-Finder). It is guessed from <code>Collection-&lt;host&gt;-…</code> paths, a passed <code>_Processed\&lt;host&gt;\</code> outDir, or this machine's name for live paths — overwrite the guess if it's wrong.</li>
       <li><b>Shared IOC list</b>: an <code>IOC.txt</code> next to this app (one term per line, <code>#</code> comments) is auto-merged into the IOC box at launch — one list covers the whole toolkit. Terms you paste locally are kept.</li>
-      <li>After every successful run a <code>runinfo.json</code> provenance entry (app, host, input path, files) is appended in the output folder — the Artifact-Finder uses it to show processed state even for runs done outside the finder.</li>
+      <li>After every successful run a <code>runinfo.json</code> provenance entry (app, host, input path, files) is appended in the output folder, including a <b>triage summary</b> (entries, flagged count, max score, top hits) — the Artifact-Finder shows these per host in its inventory, even for runs done outside the finder.</li>
     </ul>
     <h3>Notes</h3>
     <ul>
