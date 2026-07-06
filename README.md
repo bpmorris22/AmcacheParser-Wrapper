@@ -24,6 +24,7 @@ Sibling of [PECmd-Wrapper](https://github.com/bpmorris22/PECmd-Wrapper), [SrumEC
 - **IOC / keyword list with SHA1 support** — paste or load terms; **40-hex tokens are matched as SHA1 hashes** (exact) against every file entry, everything else as a case-insensitive substring across names, paths, products, publishers, programs and ProgramIds. Matches rescore live (+3). Paste hashes straight from a threat-intel report.
 - **Detail pane** — click any row: every field, click-to-copy SHA1 (ready for VT), the linked program entry, driver signing detail.
 - **Filters** — per-view category buttons with live counts, free-text search, UTC date range.
+- **Resizable columns** — drag a column-header edge to resize; widths persist per view (settings file next to the `.hta`), double-click the edge to reset that view.
 - **Reporting** — export the filtered view (any view) to CSV, or copy formatted lines straight into case notes.
 
 ## Quick start

@@ -85,6 +85,8 @@
   th,td{text-align:left;padding:4px 7px;border-bottom:1px solid #30363d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   th{background:#1c2330;cursor:pointer;color:#c9d1d9;position:relative;z-index:3;box-shadow:0 1px 0 #30363d}
   th:hover{color:#58a6ff}
+  .cgrip{position:absolute;top:0;right:0;width:8px;height:100%;cursor:col-resize;z-index:6}
+  .cgrip:hover{background:#58a6ff;filter:alpha(opacity=45);opacity:.45}
   td{max-width:360px}
   tr.sus td{background:#2a1416}
   tr.sus td.first{border-left:3px solid #ff6b6b}
@@ -244,7 +246,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.1.2";
+var APP_VERSION = "1.2.0";
 var KNOWN_LATEST_AMCP = "2026.5.0";                                            // baseline as of 2026-07-03 (live scrape verified)
 var AMCP_ZIP_URL = "https://download.ericzimmermanstools.com/net9/AmcacheParser.zip";  // official EZ mirror (.NET 9 build)
 var AMCP_PAGE = "https://ericzimmerman.github.io/";                            // for live latest-version lookup
@@ -1251,9 +1253,12 @@ function renderProgs(){
   $("tbl").innerHTML=html;
   $("count").innerHTML=nf(rows.length)+" programs"+(shown<rows.length?(" (showing "+nf(shown)+")"):"");
   var ths=$("tbl").getElementsByTagName("th");
-  for(var j=0;j<ths.length;j++){ ths[j].onclick=function(){ var kk=parseInt(this.getAttribute("data-k"),10);
+  for(var j=0;j<ths.length;j++){ ths[j].onclick=function(e){ e=e||window.event; var t=e.target||e.srcElement;
+    if(t&&/\bcgrip\b/.test(t.className+"")) return;
+    var kk=parseInt(this.getAttribute("data-k"),10);
     if(PSORTKEY===kk) PSORTDIR*=-1; else { PSORTKEY=kk; PSORTDIR=1; } renderProgs(); }; }
   applyFreeze();
+  setupColResize();
   window.__viewRows=rows;
 }
 function renderDrivers(){
@@ -1280,9 +1285,12 @@ function renderDrivers(){
   $("tbl").innerHTML=html;
   $("count").innerHTML=nf(rows.length)+" drivers"+(shown<rows.length?(" (showing "+nf(shown)+")"):"");
   var ths=$("tbl").getElementsByTagName("th");
-  for(var j=0;j<ths.length;j++){ ths[j].onclick=function(){ var kk=parseInt(this.getAttribute("data-k"),10);
+  for(var j=0;j<ths.length;j++){ ths[j].onclick=function(e){ e=e||window.event; var t=e.target||e.srcElement;
+    if(t&&/\bcgrip\b/.test(t.className+"")) return;
+    var kk=parseInt(this.getAttribute("data-k"),10);
     if(DSORTKEY===kk) DSORTDIR*=-1; else { DSORTKEY=kk; DSORTDIR=1; } renderDrivers(); }; }
   applyFreeze();
+  setupColResize();
   window.__viewRows=rows;
 }
 function render(){
@@ -1315,11 +1323,14 @@ function render(){
   $("count").innerHTML=nf(rows.length)+" rows"+(shown<rows.length?(" (showing "+nf(shown)+")"):"");
   wireHeaders();
   applyFreeze();
+  setupColResize();
   window.__viewRows=rows;
 }
 function wireHeaders(){
   var ths=$("tbl").getElementsByTagName("th");
-  for(var i=0;i<ths.length;i++){ ths[i].onclick=function(){
+  for(var i=0;i<ths.length;i++){ ths[i].onclick=function(e){
+    e=e||window.event; var t=e.target||e.srcElement;
+    if(t&&/\bcgrip\b/.test(t.className+"")) return;
     var k=parseInt(this.getAttribute("data-k"),10);
     if(SORTKEY===k) SORTDIR*=-1; else { SORTKEY=k; SORTDIR=1; }
     render();
@@ -1329,6 +1340,93 @@ function applyFreeze(){
   var sc=$("tblScroll"); if(!sc) return;
   var ths=$("tbl").getElementsByTagName("th"); var y=sc.scrollTop;
   for(var i=0;i<ths.length;i++){ ths[i].style.top=y+"px"; }
+}
+
+/* ---------- settings sidecar (JSON next to the .hta; currently persists column widths) ---------- */
+var SETTINGS={};
+function settingsPath(){ var d=htaFolder(); return d?(d+"\\AmcacheParser-Wrapper.settings.json"):""; }
+function loadSettings(){
+  var p=settingsPath(); if(!p||!fileExists(p)) return;
+  try{ if(typeof JSON!=="undefined"&&JSON.parse){ var o=JSON.parse(readUtf8(p)); if(o&&typeof o==="object") SETTINGS=o; } }catch(e){ SETTINGS={}; }
+}
+function saveSettings(){
+  var p=settingsPath(); if(!p) return;
+  try{ if(typeof JSON!=="undefined"&&JSON.stringify) writeUtf8(p, JSON.stringify(SETTINGS)); }catch(e){}
+}
+
+/* ---------- resizable columns (drag th edge; per-view widths, persisted; dblclick edge = reset view) ----------
+   Ported from DFIR-Artifact-Finder v0.2.1. One #tbl is rebuilt per view with different column sets, so
+   widths are keyed per view (files/progs/drv/generic); a stored array whose length doesn't match the
+   current th count is ignored (auto-reset for that view). */
+var COLW=null;   // per-view px widths once the user resizes: {files:[...],progs:[...],drv:[...],generic:[...]}
+var DRAG=null;   // active column-drag state
+function colwKey(){ return (MODE==="generic")?"generic":VIEW; }
+function curZoom(){
+  try{ var el=$("content");
+    var z=parseFloat(el.style.zoom||(el.currentStyle&&el.currentStyle.zoom)||"");
+    if(!z && window.getComputedStyle) z=parseFloat(getComputedStyle(el).zoom);
+    return (z&&z>0)?z:1;
+  }catch(e){ return 1; }
+}
+function setupColResize(){
+  var tbl=$("tbl"); if(!tbl) return;
+  var ths=tbl.getElementsByTagName("th"); if(!ths.length) return;
+  var key=colwKey(), arr=(COLW&&COLW[key])?COLW[key]:null;
+  if(arr && arr.length===ths.length){
+    tbl.style.tableLayout="fixed"; tbl.style.width="auto";
+    for(var j=0;j<ths.length;j++) ths[j].style.width=arr[j]+"px";
+  } else {
+    tbl.style.tableLayout=""; tbl.style.width="";
+  }
+  for(var i=0;i<ths.length;i++){
+    var g=document.createElement("div");
+    g.className="cgrip"; g.setAttribute("data-ci",String(i));
+    g.title="Drag to resize column — double-click to reset this view's widths";
+    g.onmousedown=gripDown; g.ondblclick=gripReset;
+    ths[i].appendChild(g);
+  }
+}
+function gripDown(e){
+  e=e||window.event;
+  var ci=parseInt(this.getAttribute("data-ci"),10);
+  var tbl=$("tbl"), ths=tbl.getElementsByTagName("th");
+  if(isNaN(ci)||ci<0||ci>=ths.length) return false;
+  var key=colwKey();
+  if(!COLW) COLW={};
+  if(!COLW[key] || COLW[key].length!==ths.length){    // first drag in this view: freeze the browser's current widths
+    var arr=[]; for(var i=0;i<ths.length;i++) arr.push(ths[i].offsetWidth);
+    COLW[key]=arr;
+    tbl.style.tableLayout="fixed"; tbl.style.width="auto";
+    for(var j=0;j<ths.length;j++) ths[j].style.width=arr[j]+"px";
+  }
+  DRAG={key:key, ci:ci, x:(e.clientX||0), w:COLW[key][ci], th:ths[ci], z:curZoom()};
+  document.onmousemove=gripMove; document.onmouseup=gripUp;
+  document.onselectstart=function(){ return false; };
+  if(e.preventDefault) e.preventDefault(); e.returnValue=false;
+  if(e.stopPropagation) e.stopPropagation(); e.cancelBubble=true;
+  return false;
+}
+function gripMove(e){
+  e=e||window.event; if(!DRAG) return false;
+  var w=Math.round(DRAG.w+((e.clientX||0)-DRAG.x)/DRAG.z);
+  if(w<40) w=40; if(w>1600) w=1600;
+  COLW[DRAG.key][DRAG.ci]=w; DRAG.th.style.width=w+"px";
+  return false;
+}
+function gripUp(){
+  document.onmousemove=null; document.onmouseup=null; document.onselectstart=null;
+  if(DRAG){ DRAG=null; SETTINGS.colw=COLW; try{ saveSettings(); }catch(e){} }
+}
+function gripReset(e){
+  e=e||window.event;
+  document.onmousemove=null; document.onmouseup=null; document.onselectstart=null; DRAG=null;
+  if(COLW) COLW[colwKey()]=null;
+  SETTINGS.colw=COLW; try{ saveSettings(); }catch(er){}
+  var tbl=$("tbl"); if(tbl){ tbl.style.tableLayout=""; tbl.style.width=""; }
+  render();
+  setStatus("Column widths reset for this view","ok");
+  if(e){ if(e.stopPropagation) e.stopPropagation(); e.cancelBubble=true; }
+  return false;
 }
 
 /* ---------- detail pane ---------- */
@@ -1484,9 +1582,12 @@ function renderGeneric(){
   h+="</tbody>"; $("tbl").innerHTML=h;
   $("count").innerHTML=nf(rows.length)+" rows"+(shown<rows.length?(" (showing "+nf(shown)+")"):"");
   var ths=$("tbl").getElementsByTagName("th");
-  for(var i2=0;i2<ths.length;i2++){ ths[i2].onclick=function(){ var kk=parseInt(this.getAttribute("data-k"),10);
+  for(var i2=0;i2<ths.length;i2++){ ths[i2].onclick=function(e){ e=e||window.event; var t=e.target||e.srcElement;
+    if(t&&/\bcgrip\b/.test(t.className+"")) return;
+    var kk=parseInt(this.getAttribute("data-k"),10);
     if(GSORTKEY===kk) GSORTDIR*=-1; else { GSORTKEY=kk; GSORTDIR=1; } renderGeneric(); }; }
   applyFreeze();
+  setupColResize();
   window.__viewRows=rows;
 }
 function setMode(m){
@@ -1593,6 +1694,8 @@ function init(){
   $("appver").innerHTML="&middot; v"+APP_VERSION;
   try{ document.title="AmcacheParser Wrapper v"+APP_VERSION; }catch(e){}
   $("tblScroll").onscroll=applyFreeze;
+  loadSettings();
+  if(SETTINGS.colw && typeof SETTINGS.colw==="object") COLW=SETTINGS.colw;
   var fso=new ActiveXObject("Scripting.FileSystemObject");
   // no default input: the live hive is locked, so the normal flow is Browse → a collected Amcache.hve
   $("pfPath").value="";
@@ -1668,6 +1771,7 @@ function init(){
 
   /* click delegation: data-q anywhere → search filter; pf table row → detail pane */
   document.onclick=function(e){ e=e||window.event; var t=e.target||e.srcElement;
+    if(t&&/\bcgrip\b/.test(t.className+"")) return;
     var dc=t&&t.getAttribute?t.getAttribute("data-catq"):null;
     if(dc){ CURCAT=dc; highlightCat(); render(); return; }
     var q=t&&t.getAttribute?t.getAttribute("data-q"):null;
@@ -1827,6 +1931,7 @@ window.onload=function(){ init(); try{ window.setTimeout(checkSelfUpdate,600); }
     <h3>Notes</h3>
     <ul>
       <li>Files, Programs and Drivers views, SHA-1 IOC matching, and a detail pane are built in. All timestamps UTC.</li>
+      <li>Drag a column-header edge to resize it (widths persist per view); double-click the edge to reset that view.</li>
       <li>A dirty hive parses with <code>--nl</code> automatically; first-seen times corroborate staging timelines.</li>
     </ul>
     <p class="muted" style="font-size:11px">MIT © 2026 Ben Morris — click the link above for the full README &amp; releases.</p>
