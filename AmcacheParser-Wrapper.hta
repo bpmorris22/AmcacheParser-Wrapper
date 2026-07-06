@@ -106,6 +106,15 @@
   .lnk{cursor:pointer;color:#58a6ff}
   .lnk:hover{text-decoration:underline}
   .sep{display:inline-block;width:1px;height:18px;background:#30363d;margin:0 6px;vertical-align:middle}
+  .modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.66);z-index:1000;overflow:auto}
+  .modal .mcard{max-width:780px;margin:36px auto;background:#161b22;border:1px solid #30363d;border-radius:10px;padding:18px 22px}
+  .modal h2{margin:0 0 6px;font-size:18px;font-weight:600}
+  .modal h3{margin:12px 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:#8b949e}
+  .modal ul{margin:4px 0;padding-left:20px}.modal li{margin:3px 0;font-size:13px}
+  .modal p{font-size:13px;margin:6px 0}
+  .modal code{background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:2px 6px;font-family:Consolas,monospace;font-size:12px}
+  .modal .x{float:right;cursor:pointer;color:#8b949e;font-size:22px;line-height:1}.modal .x:hover{color:#e6edf3}
+  .modal .gh{font-family:Consolas,monospace;font-size:12px}
 </style>
 </head>
 <body>
@@ -114,6 +123,7 @@
   <span class="pill" id="verpill">version: checking&hellip;</span>
   <span class="pill" id="srcpill">no data loaded</span>
   <span style="float:right">
+    <button class="btn" id="helpBtn" onclick="openHelp()" title="Help, about &amp; GitHub link">Help</button>
     <button class="btn" id="fdown" title="Smaller text">A&minus;</button>
     <button class="btn" id="fup" title="Larger text">A+</button>
   </span>
@@ -233,7 +243,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.1.0";
+var APP_VERSION = "1.1.1";
 var KNOWN_LATEST_AMCP = "2026.5.0";                                            // baseline as of 2026-07-03 (live scrape verified)
 var AMCP_ZIP_URL = "https://download.ericzimmermanstools.com/net9/AmcacheParser.zip";  // official EZ mirror (.NET 9 build)
 var AMCP_PAGE = "https://ericzimmerman.github.io/";                            // for live latest-version lookup
@@ -1697,7 +1707,24 @@ function dayNum(s){ if(!s) return 0; var m=String(s).match(/(\d{4})-(\d{1,2})-(\
 /* ---------- command-line invocation: "<inputOrCsv>" ["<outDir>"] [/auto] ----------
    .csv → auto-load into the viewer; an Amcache.hve file or collection directory → prefill (+process if /auto).
    processPf() auto-detects file vs recursive folder, so no mode toggle is needed. */
-function tokenizeCmdTail(){ var cl=""; try{ cl=amcacheHta.commandLine+""; }catch(e){ return []; }
+/* HTA:APPLICATION.commandLine is UNDEFINED in IE=edge document mode (a known mshta quirk that silently
+   kills CLI args). Recover it from WMI: the newest mshta.exe process whose command line names this .hta. */
+function getCommandLine(){
+  try{ var cl=amcacheHta.commandLine+""; if(cl && cl!=="undefined") return cl; }catch(e){}
+  try{
+    var lp=decodeURIComponent(location.pathname+"").replace(/^\//,"").replace(/\//g,"\\");
+    var fn=lp.substring(lp.lastIndexOf("\\")+1).toLowerCase(); if(!fn) return "";
+    var loc=new ActiveXObject("WbemScripting.SWbemLocator"), svc=loc.ConnectServer(".","root\\cimv2");
+    var q=svc.ExecQuery("SELECT CommandLine,CreationDate FROM Win32_Process WHERE Name='mshta.exe'");
+    var best="", bestDate="", en=new Enumerator(q);
+    for(; !en.atEnd(); en.moveNext()){ var pr=en.item(); var pcl=(pr.CommandLine==null?"":pr.CommandLine+"");
+      if(pcl.toLowerCase().indexOf(fn)<0) continue; var cd=(pr.CreationDate==null?"":pr.CreationDate+"");
+      if(!best || cd>bestDate){ best=pcl; bestDate=cd; } }
+    return best;
+  }catch(e2){}
+  return "";
+}
+function tokenizeCmdTail(){ var cl=getCommandLine(); if(!cl) return [];
   var m=cl.match(/\.hta"?/i); var tail=m?cl.substring(m.index+m[0].length):cl;
   var toks=[],i=0,n=tail.length,cur="",inq=false;
   while(i<n){ var c=tail.charAt(i);
@@ -1722,7 +1749,40 @@ function applyCli(cli){ if(!cli.input) return false;
   else setStatus("CLI: input prefilled — click 'Process → analyze' to run.","muted");
   return true; }
 
+/* ---------- help / about overlay ---------- */
+var GITHUB="https://github.com/bpmorris22/AmcacheParser-Wrapper";
+function openUrl(u){ try{ new ActiveXObject("WScript.Shell").Run('"'+u+'"',1,false); }catch(e){ setStatus("Could not open browser: "+e.message,"err"); } }
+function openHelp(){ try{ $("helpVer").innerHTML="v"+APP_VERSION; }catch(e){} showEl("helpModal",true); }
+function closeHelp(){ showEl("helpModal",false); }
+
 window.onload=init;
 </script>
+<div id="helpModal" class="modal hide" onclick="if((event.srcElement||{}).id==='helpModal')closeHelp()">
+  <div class="mcard">
+    <span class="x" onclick="closeHelp()" title="Close">&times;</span>
+    <h2>AmcacheParser Wrapper <span class="muted" style="font-size:13px;font-weight:400" id="helpVer"></span></h2>
+    <div class="gh muted">GitHub: <span class="lnk" onclick="openUrl(GITHUB)">https://github.com/bpmorris22/AmcacheParser-Wrapper</span></div>
+    <p>A single-file GUI for triaging <b>Amcache</b> (<code>Amcache.hve</code>) with Eric Zimmerman's AmcacheParser — program, file and driver execution/presence evidence.</p>
+    <h3>Quick start</h3>
+    <ul>
+      <li>Put this <code>.hta</code> next to <code>AmcacheParser.exe</code>, or use the update/download button to fetch it.</li>
+      <li><b>Browse</b> to a collected <code>Amcache.hve</code> (the live hive is locked — snapshot it first with <code>esentutl /y /vss</code> elevated, or use <b>Snapshot live</b>), then <b>Process → analyze</b>.</li>
+      <li>Or <b>Load existing CSV…</b> to view an AmcacheParser CSV you already have.</li>
+    </ul>
+    <h3>Command line</h3>
+    <p><code>mshta "AmcacheParser-Wrapper.hta" "&lt;inputOrCsv&gt;" ["&lt;outDir&gt;"] [/auto]</code></p>
+    <ul>
+      <li><code>&lt;input&gt;</code> — a <code>.csv</code> (auto-loads) or an <code>Amcache.hve</code> file / collection directory (prefilled; processed with <code>/auto</code>).</li>
+      <li><code>&lt;outDir&gt;</code> — CSV output directory (optional). &nbsp; <code>/auto</code> — process immediately.</li>
+    </ul>
+    <h3>Notes</h3>
+    <ul>
+      <li>Files, Programs and Drivers views, SHA-1 IOC matching, and a detail pane are built in. All timestamps UTC.</li>
+      <li>A dirty hive parses with <code>--nl</code> automatically; first-seen times corroborate staging timelines.</li>
+    </ul>
+    <p class="muted" style="font-size:11px">MIT © 2026 Ben Morris — click the link above for the full README &amp; releases.</p>
+  </div>
+</div>
+
 </body>
 </html>
