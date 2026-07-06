@@ -66,6 +66,17 @@ File entries shade at score ≥ 3 — Amcache indexes every binary the compatibi
 - Table display caps at 6,000 rows for responsiveness; exports always write the full filtered set.
 - **Running from a network location** (mapped drive / UNC): Windows zone policy blocks the UTF-8 file reader there, so the app automatically falls back to ANSI file IO and logs a one-time note. Everything functions; rare non-ASCII characters may display incorrectly. For full fidelity run from a local path.
 
+## Command line
+
+The wrapper can be launched with arguments so an artifact-finder (or a shortcut) opens it already pointed at an artifact:
+
+```
+mshta.exe "AmcacheParser-Wrapper.hta" "<inputOrCsv>" ["<outDir>"] [/auto]
+```
+- `<input>` — a `.csv` (auto-loaded into the viewer) or an `Amcache.hve` file / collection directory (prefilled; processed if `/auto`).
+- `<outDir>` — CSV output directory (optional).
+- `/auto` — process immediately.
+
 ## Credits
 
 - [Eric Zimmerman](https://ericzimmerman.github.io/) for AmcacheParser and the EZ Tools suite — this is an unaffiliated wrapper around his parser; all parsing credit is his.
