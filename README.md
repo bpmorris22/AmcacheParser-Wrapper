@@ -76,11 +76,11 @@ mshta.exe "AmcacheParser-Wrapper.hta" "<inputOrCsv>" ["<outDir>"] [/auto] [/from
 ```
 - `<input>` — a `.csv` (auto-loaded into the viewer) or an `Amcache.hve` file / collection directory (prefilled; processed if `/auto`).
 - `<outDir>` — CSV output directory (optional; defaults to `_Processed\<host>\AmcacheParser` next to the app).
-- **Target hostname** is required before processing — it names the `_Processed\<host>\AmcacheParser` output folder next to the app (family convention shared with the DFIR-Artifact-Finder, so processed evidence is visible per host per tool). Guessed from `Collection-<host>-…` paths, a passed `_Processed\<host>\` outDir, or this machine's name for live paths — overwrite the guess if it's wrong.
+- **Target hostname** is required before processing — it names the `_Processed\<host>\AmcacheParser` output folder next to the app (family convention shared with the DFIR-Windows-Artifact-Finder, so processed evidence is visible per host per tool). Guessed from `Collection-<host>-…` paths, a passed `_Processed\<host>\` outDir, or this machine's name for live paths — overwrite the guess if it's wrong.
 - **Shared IOC list** — an `IOC.txt` next to the app (one term per line, `#` comments) is auto-merged into the IOC box at launch; one list covers the whole toolkit and terms you paste locally are kept.
-- **Run provenance + triage summary** — every successful run appends a `runinfo.json` entry (app, host, input path, files) in the output folder, including a triage summary (entries, flagged count, max score, top hits); the DFIR-Artifact-Finder shows these per host in its inventory, even for standalone runs.
+- **Run provenance + triage summary** — every successful run appends a `runinfo.json` entry (app, host, input path, files) in the output folder, including a triage summary (entries, flagged count, max score, top hits); the DFIR-Windows-Artifact-Finder shows these per host in its inventory, even for standalone runs.
 - `/auto` — process immediately.
-- `/from:yyyy-MM-dd` `/to:yyyy-MM-dd` — case window (UTC, inclusive): prefills the date filter and is recorded in `runinfo.json`; never affects scoring. The [DFIR-Artifact-Finder](https://github.com/bpmorris22/DFIR-Artifact-Finder) passes these on every launch.
+- `/from:yyyy-MM-dd` `/to:yyyy-MM-dd` — case window (UTC, inclusive): prefills the date filter and is recorded in `runinfo.json`; never affects scoring. The [DFIR-Windows-Artifact-Finder](https://github.com/bpmorris22/DFIR-Windows-Artifact-Finder) passes these on every launch.
 
 ## Credits
 
