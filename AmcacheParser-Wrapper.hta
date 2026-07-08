@@ -125,6 +125,7 @@
   <span class="pill" id="verpill">version: checking&hellip;</span>
   <span class="pill" id="srcpill">no data loaded</span>
   <span style="float:right">
+    <button class="btn" id="instrBtn" onclick="openInstructions()" title="Download the latest HTML field guide from GitHub and open it in your browser">Instructions</button>
     <button class="btn" id="helpBtn" onclick="openHelp()" title="Help, about &amp; GitHub link">Help</button>
     <button class="btn primary hide" id="selfUpd" onclick="doSelfUpdate()" title="A newer version is available on GitHub">Update</button>
     <button class="btn" id="fdown" title="Smaller text">A&minus;</button>
@@ -248,7 +249,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.6.1";
+var APP_VERSION = "1.7.0";
 var KNOWN_LATEST_AMCP = "2026.5.0";                                            // baseline as of 2026-07-03 (live scrape verified)
 var AMCP_ZIP_URL = "https://download.ericzimmermanstools.com/net9/AmcacheParser.zip";  // official EZ mirror (.NET 9 build)
 var AMCP_PAGE = "https://ericzimmerman.github.io/";                            // for live latest-version lookup
@@ -745,7 +746,16 @@ function processPf(){
   }
   if(!inp||!fso.FileExists(inp)){ setStatus("Hive not found: "+inp+" — point at an Amcache.hve or a collection folder (the live hive is locked while Windows runs).","err"); return; }
   if(!outdir){ setStatus("Set an output directory","err"); return; }
-  if(!EXE||!fileExists(EXE)){ setStatus("AmcacheParser.exe not found — download it first","err"); return; }
+  if(!EXE||!fileExists(EXE)){
+    // Process was pressed but the parser has not been downloaded yet — offer to fetch it, then
+    // continue straight into processing. downloadLatest() shows its own download confirmation and
+    // is synchronous, re-resolving EXE on success; if the user declines or it fails, EXE stays empty.
+    setStatus("AmcacheParser.exe not found — downloading it before processing…","muted");
+    appendLog("Process requested but AmcacheParser.exe is not present — prompting to download it first.");
+    downloadLatest();
+    if(!EXE||!fileExists(EXE)){ setStatus("AmcacheParser.exe is still not available — download it (Update / download AmcacheParser), then Process again.","err"); return; }
+    appendLog("AmcacheParser downloaded on demand — continuing to process "+inp);
+  }
   var extra="";
   if($("optInc").checked) extra+=" -i";
   if($("optNl").checked) extra+=" --nl";
@@ -791,6 +801,7 @@ function processPfDone(log,outdir,before){
     return;
   }
   var errNote = /is in old format/i.test(log) ? " — note: OLD-format (Win8-era) hive; reduced CSV set, generic grid only." : "";
+  fresh=hostTagCsvs(fresh, $("hostName").value);   // stamp the target hostname into each produced CSV filename
   writeRunInfo(outdir, $("pfPath").value, fresh);
   PRODUCED=fresh;
   populateProduced(fresh);
@@ -802,6 +813,30 @@ function processPfDone(log,outdir,before){
   setStatus("Produced "+fresh.length+" CSV(s); loaded "+main.name+". Pick the others from 'Produced CSVs'."+errNote,"ok");
   loadCsvFile(main.path);
   patchRunInfoSummary(buildRunSummary());   // rows are scored now — add the triage headline to the runinfo entry
+}
+/* ---------- host-tag produced CSVs (1.7.0) ----------
+   AmcacheParser names its 8 CSVs <ts>_Amcache_<kind>.csv with no host in them. Rename each freshly
+   produced file to <ts>_<host>_Amcache_<kind>.csv so the target host is visible on disk and in the
+   Produced-CSVs picker. The host token sits AFTER the numeric timestamp so files still sort newest-
+   first, and amcSibling()/the *_UnassociatedFileEntries* detection still match. Files already tagged
+   (or not in AmcacheParser's native form) are left untouched; a rename failure is non-fatal. */
+function hostTagCsvs(fresh, host){
+  var tag=sanitHost(host||""); if(!tag) return fresh;
+  var fso=new ActiveXObject("Scripting.FileSystemObject"), out=[];
+  for(var i=0;i<fresh.length;i++){
+    var f=fresh[i];
+    var m=String(f.name).match(/^(\d+)_Amcache_([A-Za-z]+\.csv)$/i);   // only the native <ts>_Amcache_<kind>.csv form
+    if(!m){ out.push(f); continue; }
+    var newName=m[1]+"_"+tag+"_Amcache_"+m[2];
+    if(newName===f.name){ out.push(f); continue; }
+    var dir=f.path.substring(0,f.path.lastIndexOf("\\")+1), newPath=dir+newName;
+    try{
+      if(fso.FileExists(newPath)) fso.DeleteFile(newPath);
+      fso.MoveFile(f.path, newPath);
+      out.push({name:newName, path:newPath, size:f.size});
+    }catch(e){ appendLog("Could not host-tag "+f.name+": "+e.message); out.push(f); }
+  }
+  return out;
 }
 function csvNameSet(dir){ var o={}, l=listCsvFiles(dir); for(var i=0;i<l.length;i++) o[l[i].name]=true; return o; }
 function listCsvFiles(dir){
@@ -969,11 +1004,13 @@ function amcJoin(recs){
       +rec.appName+" "+rec.programId+" "+rec.ver+" "+rec.descr).toLowerCase();
   }
 }
-/* siblings of one run share the timestamp prefix: <dir>\<ts>_Amcache_<kind>.csv */
+/* siblings of one run share the prefix before Amcache_<kind>: <dir>\<ts>[_<host>]_Amcache_<kind>.csv
+   The optional _<host>_ token (added by hostTagCsvs in 1.7.0) is captured in the prefix so it is
+   preserved; untagged native names (<ts>_Amcache_<kind>.csv) still match. */
 function amcSibling(path, kind){
-  var m=String(path).match(/^(.*\\)(\d+)_Amcache_[A-Za-z]+\.csv$/i);
+  var m=String(path).match(/^(.*\\)(.*_)Amcache_[A-Za-z]+\.csv$/i);
   if(!m) return "";
-  return m[1]+m[2]+"_Amcache_"+kind+".csv";
+  return m[1]+m[2]+"Amcache_"+kind+".csv";
 }
 function ingestAmcache(path, raw, idx){
   var isAssoc=/_Amcache_AssociatedFileEntries\.csv$/i.test(path);
@@ -1009,7 +1046,12 @@ function ingestAmcache(path, raw, idx){
   $("results").className="";
   var na=0; for(var i=0;i<ROWS.length;i++){ if(ROWS[i].assoc) na++; }
   $("srcpill").innerHTML=nf(ROWS.length)+" file entries ("+nf(na)+" assoc / "+nf(ROWS.length-na)+" unassoc) &middot; "+nf(PROGS.length)+" programs &middot; "+nf(DRIVERS.length)+" drivers &middot; "+esc(merged);
-  QUERY=""; $("q").value=""; DFROM=0; DTO=0; $("dfrom").value=""; $("dto").value="";
+  // preserve a CLI /from:/to: case window across ingest (bug fix 1.7.0: a fresh Process run
+  // used to blank the date filter, dropping the window the Finder prefilled). Manual loads have
+  // CASE_FROM/CASE_TO empty, so this still clears to no-window for hand-loaded CSVs.
+  QUERY=""; $("q").value="";
+  DFROM=CASE_FROM?dayNum(CASE_FROM):0; DTO=CASE_TO?dayNum(CASE_TO):0;
+  $("dfrom").value=CASE_FROM||""; $("dto").value=CASE_TO||"";
   CURCAT="all"; highlightCat();
   SORTKEY=3; SORTDIR=-1; PSORTKEY=4; PSORTDIR=-1; DSORTKEY=0; DSORTDIR=1;
   $("vFiles").innerHTML="File entries ("+nf(ROWS.length)+")";
@@ -1041,7 +1083,9 @@ function ingestAmcacheAux(path, raw, idx, kind){
   populateSourceFilter([]);
   $("results").className="";
   $("srcpill").innerHTML=((kind==="progs")?(nf(PROGS.length)+" programs"):(nf(DRIVERS.length)+" drivers"))+" &middot; "+esc(baseName(path))+" (standalone)";
-  QUERY=""; $("q").value=""; DFROM=0; DTO=0; $("dfrom").value=""; $("dto").value="";
+  QUERY=""; $("q").value="";
+  DFROM=CASE_FROM?dayNum(CASE_FROM):0; DTO=CASE_TO?dayNum(CASE_TO):0;
+  $("dfrom").value=CASE_FROM||""; $("dto").value=CASE_TO||"";
   CURCAT="all";
   $("vFiles").innerHTML="File entries (0)";
   $("vProgs").innerHTML="Programs ("+nf(PROGS.length)+")";
@@ -1720,6 +1764,8 @@ function setMode(m){
 function cq(v){ v=(v==null)?"":String(v); return /[",\r\n]/.test(v)?('"'+v.replace(/"/g,'""')+'"'):v; }
 function nowStamp(){ var d=new Date(); function p(x){return (x<10?"0":"")+x;}
   return d.getFullYear()+""+p(d.getMonth()+1)+p(d.getDate())+"_"+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds()); }
+/* filename prefix carrying the target host, e.g. "WORKSTATION-01_" — empty when no host is set */
+function hostTag(){ var h=sanitHost($("hostName").value||""); return h?(h+"_"):""; }
 function exportView(){
   if(MODE==="generic"){ exportGeneric(); return; }
   var rows=window.__viewRows||[];
@@ -1747,7 +1793,7 @@ function exportView(){
         cq(r.assoc?"associated":"unassociated"),cq(r.isPe?"True":"False"),cq(r.isOs?"True":"False")].join(",")); }
   }
   var dir=LASTOUTDIR||$("outDir").value;
-  var path=dir+"\\filtered_export_"+nowStamp()+".csv";
+  var path=dir+"\\"+hostTag()+"filtered_export_"+nowStamp()+".csv";
   try{ writeUtf8(path, lines.join("\r\n")); setStatus("Exported "+nf(rows.length)+" rows → "+path,"ok"); appendLog("Exported: "+path); }
   catch(e){ setStatus("Export failed: "+e.message,"err"); }
 }
@@ -1757,7 +1803,7 @@ function exportGeneric(){
   var lines=[]; var hd=[]; for(var c=0;c<GHEAD.length;c++) hd.push(cq(GHEAD[c])); lines.push(hd.join(","));
   for(var i=0;i<rows.length;i++){ var rw=rows[i]; var cells=[]; for(var c2=0;c2<GHEAD.length;c2++) cells.push(cq(c2<rw.length?rw[c2]:"")); lines.push(cells.join(",")); }
   var dir=LASTOUTDIR||$("outDir").value;
-  var path=dir+"\\filtered_export_"+nowStamp()+".csv";
+  var path=dir+"\\"+hostTag()+"filtered_export_"+nowStamp()+".csv";
   try{ writeUtf8(path, lines.join("\r\n")); setStatus("Exported "+nf(rows.length)+" rows → "+path,"ok"); appendLog("Exported: "+path); }
   catch(e){ setStatus("Export failed: "+e.message,"err"); }
 }
@@ -1988,6 +2034,45 @@ var GITHUB="https://github.com/bpmorris22/AmcacheParser-Wrapper";
 function openUrl(u){ try{ new ActiveXObject("WScript.Shell").Run('"'+u+'"',1,false); }catch(e){ setStatus("Could not open browser: "+e.message,"err"); } }
 function openHelp(){ try{ $("helpVer").innerHTML="v"+APP_VERSION; }catch(e){} showEl("helpModal",true); }
 function closeHelp(){ showEl("helpModal",false); }
+
+/* ---------- Instructions: fetch the latest shared toolkit field guide & open it (1.7.0) ----------
+   The self-contained HTML manual (covers the whole wrapper family) is too large to embed, so we
+   download it to %TEMP% (overwritten each click = always the latest) and open THAT via its browser
+   association. Falls back to a previously downloaded copy if the fetch fails (offline). */
+var MANUAL_URL="https://raw.githubusercontent.com/bpmorris22/DFIR-Windows-Artifact-Finder/main/docs/DFIR-Toolkit-Manual.html";
+var MANUAL_FILE="DFIR-Toolkit-Manual.html";
+function openManualFile(path){
+  try{ new ActiveXObject("WScript.Shell").Run('explorer.exe "'+path+'"',1,false); return true; }   // explorer = ShellExecute (default-browser association)
+  catch(e){ setStatus("Downloaded the field guide, but could not open it: "+e.message,"err"); return false; }
+}
+function openInstructions(){
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var dest=fso.GetSpecialFolder(2)+"\\"+MANUAL_FILE;   // %TEMP% — overwritten each click with the latest
+  setStatus("Downloading the field guide from GitHub…","muted");
+  var ps1=fso.GetSpecialFolder(2)+"\\amc_man_"+uid()+".ps1";
+  var dq=String(dest).replace(/'/g,"''");
+  var L=[];
+  L.push("$ErrorActionPreference='Stop'");
+  L.push("[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12");
+  L.push("Invoke-WebRequest -UseBasicParsing -Uri '"+MANUAL_URL+"' -OutFile '"+dq+"' -Headers @{ 'User-Agent'='AmcacheParser-Wrapper' }");
+  L.push("if((Get-Item '"+dq+"').Length -lt 2000){ throw 'downloaded file too small' }");
+  L.push("Write-Output 'MAN_OK'");
+  try{ var f=fso.CreateTextFile(ps1,true); f.Write(L.join("\r\n")); f.Close(); }
+  catch(ew){ setStatus("Could not stage the field-guide download: "+ew.message,"err"); return; }
+  var r=runBat(['powershell -NoProfile -ExecutionPolicy Bypass -File "'+ps1+'" > "__LOG__" 2>&1']);
+  try{ fso.DeleteFile(ps1); }catch(e0){}
+  if((r.log+"").indexOf("MAN_OK")>=0 && fileExists(dest)){
+    if(openManualFile(dest)) setStatus("Field guide downloaded and opened in your browser.","ok");
+    appendLog("Field guide: downloaded latest -> "+dest);
+  } else {
+    appendLog("--- field-guide download ---\n"+r.log);
+    if(fileExists(dest)){
+      if(openManualFile(dest)) setStatus("Download failed (offline?) — opened the previously downloaded copy.","muted");
+    } else {
+      setStatus("Field-guide download failed (offline, or the file moved). See log; or open it from the GitHub repo.","err");
+    }
+  }
+}
 
 /* ---------- self-update: quiet check of this app's GitHub Releases; one-click download of a newer .hta ---------- */
 var SELF_REPO="bpmorris22/AmcacheParser-Wrapper", SELF_HTA="AmcacheParser-Wrapper.hta", SELF_LATEST="", SELF_ASSET_URL="";
