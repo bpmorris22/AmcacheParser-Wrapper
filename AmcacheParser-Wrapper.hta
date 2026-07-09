@@ -48,7 +48,7 @@
 <style>
   html{margin:0;height:100%;background:#0d1117}
   body{margin:0;height:100%;background:#0d1117;color:#e6edf3;font-family:Segoe UI,Tahoma,sans-serif;font-size:16px}
-  #content{zoom:0.9}
+  #content{zoom:0.9;box-sizing:border-box}
   a{color:#58a6ff}
   .mono{font-family:Consolas,"Courier New",monospace}
   .muted{color:#8b949e}
@@ -91,7 +91,7 @@
   tr.sus td{background:#2a1416}
   tr.sus td.first{border-left:3px solid #ff6b6b}
   tr.sel td{background:#1c2f4a}
-  .scroll{max-height:52vh;overflow:auto;border:1px solid #30363d;border-radius:8px}
+  .scroll{max-height:52vh;overflow:auto;border:1px solid #30363d;border-radius:8px;width:100%;box-sizing:border-box}
   .tag{display:inline-block;font-size:10px;padding:1px 6px;border-radius:10px;font-weight:600;margin-right:3px}
   .tag.sus{background:#3a1416;color:#ff6b6b}
   .tag.usr{background:#3a2d10;color:#d29922}
@@ -99,11 +99,11 @@
   .tag.rare{background:#241a3a;color:#b083f0}
   .tag.ioc{background:#3a1416;color:#ff6b6b;border:1px solid #ff6b6b}
   .tag.gen{background:#21262d;color:#8b949e}
-  .dl{font-family:Consolas,"Courier New",monospace;font-size:11px;max-height:210px;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:6px;margin:4px 0;white-space:nowrap}
+  .dl{font-family:Consolas,"Courier New",monospace;font-size:11px;max-height:210px;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:6px;margin:4px 0;white-space:nowrap;width:100%;box-sizing:border-box}
   .dl div{overflow:hidden;text-overflow:ellipsis}
   .hl-user{color:#d29922}
   .hl-ioc{color:#ff6b6b;font-weight:700}
-  #log{white-space:pre-wrap;font-family:Consolas,monospace;font-size:11px;color:#8b949e;max-height:140px;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;display:none;margin-top:8px}
+  #log{white-space:pre-wrap;font-family:Consolas,monospace;font-size:11px;color:#8b949e;max-height:140px;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;display:none;margin-top:8px;width:100%;box-sizing:border-box}
   .hide{display:none}
   .lnk{cursor:pointer;color:#58a6ff}
   .lnk:hover{text-decoration:underline}
@@ -249,7 +249,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.7.0";
+var APP_VERSION = "1.7.1";
 var KNOWN_LATEST_AMCP = "2026.5.0";                                            // baseline as of 2026-07-03 (live scrape verified)
 var AMCP_ZIP_URL = "https://download.ericzimmermanstools.com/net9/AmcacheParser.zip";  // official EZ mirror (.NET 9 build)
 var AMCP_PAGE = "https://ericzimmerman.github.io/";                            // for live latest-version lookup
@@ -1869,7 +1869,7 @@ function init(){
 
   var zoom=0.9;
   var zContent=$("content");
-  function applyZoom(){ zContent.style.zoom=zoom; var p=Math.round(zoom*100)+"%";
+  function applyZoom(){ zContent.style.zoom=zoom; zContent.style.width=(100/zoom)+"%"; var p=Math.round(zoom*100)+"%";
     $("fup").title="Larger text ("+p+")"; $("fdown").title="Smaller text ("+p+")"; }
   applyZoom();
   $("fup").onclick=function(){ zoom=Math.min(zoom+0.15,2.5); applyZoom(); };
