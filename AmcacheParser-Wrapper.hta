@@ -58,6 +58,8 @@
   header h1{display:inline-block;font-size:15px;margin:0;font-weight:600;vertical-align:middle}
   header h1 small{color:#8b949e;font-weight:400}
   .pill{display:inline-block;font-size:11px;color:#8b949e;border:1px solid #30363d;border-radius:20px;padding:2px 10px;margin-left:8px;vertical-align:middle}
+  .pill.ok{color:#7ee787;border-color:#2ea043}      /* green: current / present */
+  .pill.bad{color:#ff8b3d;border-color:#bd561d}      /* orange: out of date */
   .wrap{padding:12px 14px}
   .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:12px}
   .card h3{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#8b949e}
@@ -121,8 +123,9 @@
 </head>
 <body>
 <header>
-  <h1>AmcacheParser Wrapper <small>&mdash; DFIR Amcache triage <span id="appver"></span></small></h1>
-  <span class="pill" id="verpill">version: checking&hellip;</span>
+  <h1>AmcacheParser Wrapper <small>&mdash; DFIR Amcache triage</small></h1>
+  <span class="pill" id="apppill" title="This app's version">app: checking&hellip;</span>
+  <span class="pill" id="verpill" title="AmcacheParser.exe version">AmcacheParser: checking&hellip;</span>
   <span class="pill" id="srcpill">no data loaded</span>
   <span style="float:right">
     <button class="btn" id="instrBtn" onclick="openInstructions()" title="Download the latest HTML field guide from GitHub and open it in your browser">Instructions</button>
@@ -249,8 +252,8 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.7.1";
-var KNOWN_LATEST_AMCP = "2026.5.0";                                            // baseline as of 2026-07-03 (live scrape verified)
+var APP_VERSION = "1.8.0";
+var KNOWN_LATEST_AMCP = "2026.5.0";                                            // EZ site CalVer as of 2026-07-11 (schemesComparable() guards the SemVer-banner mismatch)
 var AMCP_ZIP_URL = "https://download.ericzimmermanstools.com/net9/AmcacheParser.zip";  // official EZ mirror (.NET 9 build)
 var AMCP_PAGE = "https://ericzimmerman.github.io/";                            // for live latest-version lookup
 var LIVE_HIVE = "C:\\Windows\\appcompat\\Programs\\Amcache.hve";       // locked while Windows runs — snapshot before parsing
@@ -281,6 +284,8 @@ var GSRCIDX = -1;                    // generic mode: index of the SourceFile(na
 var SRCFILTER = "";                  // selected source-file filter (generic mode)
 var BUSY = false;                    // a AmcacheParser run is in progress
 var PRODUCED = [];                   // CSVs produced by the last run
+var AUTO_RUN = false;                // launched by the Finder with /auto (bulk) — reuse existing output silently
+var FORCE_REPROCESS = false;         // /force on the CLI — always re-run even if prior output exists (item 8)
 
 /* suspicion knobs (spec §7) */
 var USERPATHS = ["\\users\\","\\appdata\\","\\temp\\","\\downloads\\","\\programdata\\","\\perflogs\\","\\windows\\temp\\","\\$recycle.bin\\","\\public\\"];
@@ -308,7 +313,6 @@ function showEl(id,vis){ var e=$(id); if(!e) return; var c=e.className.replace(/
 function msOf(s){ if(!s) return 0; var m=String(s).match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
   if(!m) return 0; return Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]); }
 function dayOf(s){ if(!s) return 0; var m=String(s).match(/(\d{4})-(\d{2})-(\d{2})/); if(!m) return 0; return Number(m[1]+m[2]+m[3]); }
-function stripVol(p){ return String(p).replace(/\\VOLUME\{[^}]*\}/gi,""); }
 
 /* ---------- file IO via ActiveX (UTF-8 safe, with network-zone fallback) ----------
    ADODB.Stream is the proper UTF-8 reader, but when the .hta runs from a NETWORK location
@@ -408,7 +412,11 @@ function pollDone(ctx){
     return;
   }
   ctx.elapsed+=1;
-  if(ctx.elapsed>1800){ ctx.onTimeout&&ctx.onTimeout(); return; }   // 30-min safety cap
+  if(ctx.elapsed>1800){                                            // 30-min safety cap
+    try{ fso.DeleteFile(ctx.bat); }catch(eT1){}                    // tidy the temp triplet even when we stop watching (F12)
+    try{ if(fso.FileExists(ctx.done)) fso.DeleteFile(ctx.done); }catch(eT2){}
+    try{ if(fso.FileExists(ctx.log)) fso.DeleteFile(ctx.log); }catch(eT3){}
+    ctx.onTimeout&&ctx.onTimeout(); return; }
   if(ctx.onTick) ctx.onTick(ctx.elapsed);
   window.setTimeout(function(){ pollDone(ctx); }, 1000);
 }
@@ -430,6 +438,10 @@ function populateSourceFilter(vals){
 function fileExists(p){ try{ return new ActiveXObject("Scripting.FileSystemObject").FileExists(p); }catch(e){ return false; } }
 function folderExists(p){ try{ return new ActiveXObject("Scripting.FileSystemObject").FolderExists(p); }catch(e){ return false; } }
 function parentDir(p){ var i=String(p).lastIndexOf("\\"); return i>=0?p.substring(0,i):p; }
+function ensureDir(p){ try{ var fso=new ActiveXObject("Scripting.FileSystemObject");
+  if(!p||fso.FolderExists(p)) return fso.FolderExists(p);
+  var parent=parentDir(p); if(parent&&parent!==p&&!fso.FolderExists(parent)) ensureDir(parent);
+  fso.CreateFolder(p); return true; }catch(e){ return false; } }
 function htaFolder(){
   try{ var cl=amcacheHta.commandLine+""; var m=cl.match(/"([^"]+\.hta)"/i); if(!m) m=cl.match(/([A-Za-z]:\\[^"]+\.hta)/i);
     if(m) return parentDir(m[1]); }catch(e){}
@@ -455,25 +467,38 @@ function checkDeps(){
 function verTuple(v){ var p=String(v).split("."); var a=[]; for(var i=0;i<p.length;i++) a.push(parseInt(p[i],10)||0); return a; }
 function verCmp(a,b){ a=verTuple(a); b=verTuple(b); var n=Math.max(a.length,b.length);
   for(var i=0;i<n;i++){ var x=a[i]||0,y=b[i]||0; if(x!==y) return x<y?-1:1; } return 0; }
-function fetchLatest(){
+/* EZ Tools moved to CalVer (year-based major, e.g. 2026.5.0) but the shipped exe --version banners still
+   report the old SemVer (e.g. 1.5.1.0). Numbers from the two schemes are NOT comparable — verCmp'ing them
+   yields a permanent bogus "update available". Only compare when both look like the same scheme. */
+function schemesComparable(a,b){ var am=parseInt(String(a).split(".")[0],10)||0, bm=parseInt(String(b).split(".")[0],10)||0;
+  return (am>=2000)===(bm>=2000); }
+/* latest-version lookup — ASYNC (does not block launch; the site fetch used to freeze startup 2–4 s offline) */
+function fetchLatestAsync(done){
   LATEST_VER=KNOWN_LATEST_AMCP; WEB_OK=false;
   try{
-    var x=new ActiveXObject("MSXML2.ServerXMLHTTP.6.0");
-    x.setTimeouts(2000,3000,4000,4000);
-    x.open("GET", AMCP_PAGE, false); x.send();
-    if(x.status===200){ WEB_OK=true; var t=x.responseText+""; var m=t.match(/AmcacheParser[\s\S]{0,800}?(\d+\.\d+\.\d+)/i); if(m) LATEST_VER=m[1]; }
-  }catch(e){ WEB_OK=false; }
-  return LATEST_VER;
+    var x=new ActiveXObject("MSXML2.XMLHTTP.6.0");
+    x.open("GET", AMCP_PAGE, true);
+    x.onreadystatechange=function(){ if(x.readyState!==4) return;
+      try{ if(x.status===200){ WEB_OK=true; var t=x.responseText+"";
+        var m=t.match(/AmcacheParser[\s\S]{0,800}?(\d+\.\d+\.\d+)/i); if(m) LATEST_VER=m[1]; } }catch(e){}
+      if(done) done();
+    };
+    x.send();
+  }catch(e){ WEB_OK=false; if(done) done(); }
 }
+/* exe pill: green = present/current, orange = a comparable newer version exists, grey = not found (downloaded on demand) */
 function updateVerPill(){
-  var s=LOCAL_VER?("AmcacheParser v"+esc(LOCAL_VER)):"AmcacheParser: not found";
-  if(!WEB_OK){ s+=" &middot; <span style='color:#8b949e'>no internet / no web source</span>"; }
-  else if(LATEST_VER){
-    if(LOCAL_VER && verCmp(LOCAL_VER,LATEST_VER)<0) s+=" &middot; <span style='color:#d29922'>update v"+esc(LATEST_VER)+" available</span>";
-    else if(LOCAL_VER) s+=" &middot; <span style='color:#3fb950'>latest</span>";
-    else s+=" &middot; latest v"+esc(LATEST_VER);
-  }
-  $("verpill").innerHTML=s;
+  var p=$("verpill"); if(!p) return;
+  if(!LOCAL_VER){ p.className="pill"; p.innerHTML="AmcacheParser: not found";
+    p.title="AmcacheParser.exe is not next to this app or in C:\\ZimmermanTools — it is downloaded on demand when you Process."; return; }
+  var outdated = WEB_OK && LATEST_VER && schemesComparable(LOCAL_VER,LATEST_VER) && verCmp(LOCAL_VER,LATEST_VER)<0;
+  if(outdated){ p.className="pill bad"; p.innerHTML="AmcacheParser v"+esc(LOCAL_VER)+" &middot; update v"+esc(LATEST_VER);
+    p.title="A newer AmcacheParser (v"+LATEST_VER+") is on the Zimmerman Tools site — use 'Update / download AmcacheParser'."; return; }
+  p.className="pill ok"; p.innerHTML="AmcacheParser v"+esc(LOCAL_VER);
+  p.title = !WEB_OK ? ("Present and working ("+EXE+"). Couldn't reach the Zimmerman Tools site to check for a newer version.")
+    : (LATEST_VER && !schemesComparable(LOCAL_VER,LATEST_VER)
+        ? ("Present ("+EXE+"). Site lists v"+LATEST_VER+" (CalVer) vs the exe banner v"+LOCAL_VER+" (SemVer) — different schemes, not comparable, so no bogus update is forced.")
+        : ("Up to date ("+EXE+")."));
 }
 function evaluateTooling(promptIfNeeded){
   var dir=htaFolder();
@@ -482,12 +507,17 @@ function evaluateTooling(promptIfNeeded){
   if(EXE) $("exeline").innerHTML="Tool: "+esc(EXE)+"  &middot;  run with DOTNET_ROLL_FORWARD=Major (covers .NET 9-target builds)";
   else $("exeline").innerHTML='<span class="err">AmcacheParser.exe not found next to this app ('+esc(dir||"app folder")+') or in C:\\ZimmermanTools</span>';
   if(found) checkVersion(); else { LOCAL_VER=""; }
-  fetchLatest(); updateVerPill();
+  updateVerPill();                                   // show the local exe state immediately…
   if(found){ var miss=checkDeps(); if(miss.length) setStatus("AmcacheParser support files missing next to the exe: "+miss.join(", "),"err"); }
-  if(!promptIfNeeded) return;
+  fetchLatestAsync(function(){                        // …then check the site for the latest WITHOUT blocking launch (F10)
+    updateVerPill();
+    if(promptIfNeeded) maybePromptTooling(found, localComplete, dir);
+  });
+}
+function maybePromptTooling(found, localComplete, dir){
   if(localComplete){
-    // exe already next to the .hta → only prompt when the web says a newer version exists
-    if(WEB_OK && LOCAL_VER && verCmp(LOCAL_VER,LATEST_VER)<0){
+    // exe already next to the .hta → only prompt when the web says a genuinely-newer (same-scheme) version exists (F1: never on CalVer/SemVer mismatch)
+    if(WEB_OK && LOCAL_VER && schemesComparable(LOCAL_VER,LATEST_VER) && verCmp(LOCAL_VER,LATEST_VER)<0){
       if(confirm("A newer AmcacheParser is available.\n\nNext to this app: v"+LOCAL_VER+"\nLatest online:   v"+LATEST_VER+"\n\nDownload the update next to the app now?")) downloadLatest();
     }
   } else {
@@ -680,7 +710,7 @@ function writeRunInfo(outdir, input, freshFiles){
     var arr=[];
     try{ if(fileExists(p)){ var old=JSON.parse(readUtf8(p)); if(old && old.length!=null) arr=old; } }catch(e0){}
     var d=new Date(); function p2(x){ return (x<10?"0":"")+x; }
-    var iso=d.getFullYear()+"-"+p2(d.getMonth()+1)+"-"+p2(d.getDate())+"T"+p2(d.getHours())+":"+p2(d.getMinutes())+":"+p2(d.getSeconds());
+    var iso=d.getUTCFullYear()+"-"+p2(d.getUTCMonth()+1)+"-"+p2(d.getUTCDate())+"T"+p2(d.getUTCHours())+":"+p2(d.getUTCMinutes())+":"+p2(d.getUTCSeconds())+"Z";  // real UTC (was local, mislabeled)
     var names=[]; for(var i=0;i<freshFiles.length && i<50;i++) names.push(freshFiles[i].name||String(freshFiles[i]));
     var ent={app:APP_NAME, appVersion:APP_VERSION, host:sanitHost($("hostName").value),
               input:String(input||""), finishedUtc:iso, files:names};
@@ -722,6 +752,30 @@ function buildRunSummary(){
   }catch(e){ return null; }
 }
 
+/* ---------- reuse already-processed output (item 8, 2026-07-11) ----------
+   Before re-running AmcacheParser, look for a prior run of THIS exact hive recorded in the output
+   folder's runinfo.json whose primary CSV still exists. If found: a /auto (Finder bulk) launch loads
+   it silently; an interactive Process asks first. /force (or the Re-process path) always re-runs. This
+   mirrors the Finder's own [Open] button, but makes a wrapper launched to *process* skip redundant work. */
+function findExistingRun(input, outdir){
+  try{
+    var p=String(outdir).replace(/[\\\/]+$/,"")+"\\runinfo.json";
+    if(!fileExists(p)) return null;
+    var arr=JSON.parse(readUtf8(p)); if(!arr||arr.length==null) return null;
+    var inL=String(input).toLowerCase(), best=null, i;
+    for(i=0;i<arr.length;i++){ var e=arr[i];
+      if(!e||e.app!==APP_NAME||!e.input) continue;
+      if(String(e.input).toLowerCase()!==inL) continue;
+      if(!best||String(e.finishedUtc||"")>String(best.finishedUtc||"")) best=e; }
+    if(!best||!best.files||!best.files.length) return null;
+    var dir=parentDir(p), primary="", any="", j;
+    for(j=0;j<best.files.length;j++){ var fp=dir+"\\"+best.files[j];
+      if(!fileExists(fp)) continue; any=fp;
+      if(/_UnassociatedFileEntries\.csv$/i.test(best.files[j])) primary=fp; }
+    var use=primary||any;
+    return use?{csv:use, iso:best.finishedUtc||""}:null;
+  }catch(e){ return null; }
+}
 function processPf(){
   var inp=$("pfPath").value;
   if(!requireHost()) return;
@@ -746,6 +800,24 @@ function processPf(){
   }
   if(!inp||!fso.FileExists(inp)){ setStatus("Hive not found: "+inp+" — point at an Amcache.hve or a collection folder (the live hive is locked while Windows runs).","err"); return; }
   if(!outdir){ setStatus("Set an output directory","err"); return; }
+  // item 8: this hive already processed into this output folder? reuse it instead of re-running.
+  if(!FORCE_REPROCESS){
+    var prior=findExistingRun(inp, outdir);
+    if(prior){
+      var when=prior.iso?(" ("+prior.iso+")"):"";
+      if(AUTO_RUN){
+        AUTO_RUN=false;
+        appendLog("Already processed"+when+" — loading existing results instead of re-running (pass /force to re-run).");
+        setStatus("Already processed"+when+" — loaded existing results, no reprocessing.","ok");
+        LASTOUTDIR=outdir; loadCsvFile(prior.csv); return;
+      }
+      if(confirm("This hive was already processed into this folder"+when+".\n\nOpen the existing results without re-running AmcacheParser?\n\nOK = open existing results\nCancel = re-process the hive")){
+        appendLog("Reusing existing results"+when+" for "+inp);
+        LASTOUTDIR=outdir; loadCsvFile(prior.csv); return;
+      }
+      appendLog("Re-processing "+inp+" despite existing results"+when+" (operator chose re-process).");
+    }
+  }
   if(!EXE||!fileExists(EXE)){
     // Process was pressed but the parser has not been downloaded yet — offer to fetch it, then
     // continue straight into processing. downloadLatest() shows its own download confirmation and
@@ -797,7 +869,7 @@ function processPfDone(log,outdir,before){
       setStatus("AmcacheParser was denied access to the input file — check NTFS permissions, or relaunch this app elevated.","err");
     else
       setStatus("AmcacheParser produced no new CSV — see the log (is this really an Amcache.hve?).","err");
-    populateProduced(all);
+    populateProduced(all, true);   // these are pre-existing files, not this run's output (F9)
     return;
   }
   var errNote = /is in old format/i.test(log) ? " — note: OLD-format (Win8-era) hive; reduced CSV set, generic grid only." : "";
@@ -830,8 +902,15 @@ function hostTagCsvs(fresh, host){
     var newName=m[1]+"_"+tag+"_Amcache_"+m[2];
     if(newName===f.name){ out.push(f); continue; }
     var dir=f.path.substring(0,f.path.lastIndexOf("\\")+1), newPath=dir+newName;
+    if(fso.FileExists(newPath)){
+      // collision (same-second re-run, or same AmcacheParser timestamp): don't silently destroy the earlier
+      // output — suffix a counter so both survive (this is evidence handling). (F7)
+      var stem=m[1]+"_"+tag+"_Amcache_"+m[2].replace(/\.csv$/i,""), k=2, cand;
+      do{ cand=dir+stem+"_"+k+".csv"; k++; }while(fso.FileExists(cand) && k<100);
+      appendLog("Host-tag target already exists ("+newName+") — writing "+baseName(cand)+" instead so the earlier file is preserved.");
+      newPath=cand; newName=baseName(cand);
+    }
     try{
-      if(fso.FileExists(newPath)) fso.DeleteFile(newPath);
       fso.MoveFile(f.path, newPath);
       out.push({name:newName, path:newPath, size:f.size});
     }catch(e){ appendLog("Could not host-tag "+f.name+": "+e.message); out.push(f); }
@@ -848,10 +927,10 @@ function listCsvFiles(dir){
   return out;
 }
 function fmtSize(n){ if(!n) return "0 B"; var u=["B","KB","MB","GB"], i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;} return n.toFixed(i?1:0)+" "+u[i]; }
-function populateProduced(list){
+function populateProduced(list, preexisting){
   var sel=$("producedSel"); sel.innerHTML="";
   for(var i=0;i<list.length;i++){
-    var lab=list[i].name+"  ("+fmtSize(list[i].size)+")";
+    var lab=(preexisting?"(not from this run) ":"")+list[i].name+"  ("+fmtSize(list[i].size)+")";
     if(/UnassociatedFileEntries\.csv$/i.test(list[i].name)) lab+="  —  file entries with no program link (primary dataset)";
     else if(/_AssociatedFileEntries\.csv$/i.test(list[i].name)) lab+="  —  file entries linked to installed programs";
     else if(/_ProgramEntries\.csv$/i.test(list[i].name)) lab+="  —  installed programs";
@@ -900,6 +979,8 @@ function parseCSV(text){
 /* ---------- ingest dispatch ---------- */
 function loadCsvFile(path){
   try{
+    hostGuessFrom(path);                          // derive the evidence host from _Processed\<host>\ / Collection- paths (F3)
+    if(!LASTOUTDIR) LASTOUTDIR=parentDir(path);   // exports from a load-only session land beside the CSV, not the drive root (F3)
     var text=readUtf8(path);
     var raw=parseCSV(text);
     if(!raw||!raw.length){ setStatus("Empty / unparseable CSV","err"); return; }
@@ -1762,8 +1843,8 @@ function setMode(m){
 
 /* ---------- export / copy ---------- */
 function cq(v){ v=(v==null)?"":String(v); return /[",\r\n]/.test(v)?('"'+v.replace(/"/g,'""')+'"'):v; }
-function nowStamp(){ var d=new Date(); function p(x){return (x<10?"0":"")+x;}
-  return d.getFullYear()+""+p(d.getMonth()+1)+p(d.getDate())+"_"+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds()); }
+function nowStamp(){ var d=new Date(); function p(x){return (x<10?"0":"")+x;}   // UTC, to match the UTC data + runinfo
+  return d.getUTCFullYear()+""+p(d.getUTCMonth()+1)+p(d.getUTCDate())+"_"+p(d.getUTCHours())+p(d.getUTCMinutes())+p(d.getUTCSeconds()); }
 /* filename prefix carrying the target host, e.g. "WORKSTATION-01_" — empty when no host is set */
 function hostTag(){ var h=sanitHost($("hostName").value||""); return h?(h+"_"):""; }
 function exportView(){
@@ -1792,7 +1873,9 @@ function exportView(){
         cq(r.sha1),cq(r.size),cq(r.prod),cq(r.ver),cq(r.publisher),cq(r.progName),cq(r.installDate),cq(r.programId),
         cq(r.assoc?"associated":"unassociated"),cq(r.isPe?"True":"False"),cq(r.isOs?"True":"False")].join(",")); }
   }
-  var dir=LASTOUTDIR||$("outDir").value;
+  var dir=LASTOUTDIR||trimStr($("outDir").value);
+  if(!dir){ setStatus("No output folder to export into — process an artifact or set the CSV output directory first.","err"); return; }
+  ensureDir(dir);
   var path=dir+"\\"+hostTag()+"filtered_export_"+nowStamp()+".csv";
   try{ writeUtf8(path, lines.join("\r\n")); setStatus("Exported "+nf(rows.length)+" rows → "+path,"ok"); appendLog("Exported: "+path); }
   catch(e){ setStatus("Export failed: "+e.message,"err"); }
@@ -1802,7 +1885,9 @@ function exportGeneric(){
   if(!GHEAD||!rows.length){ setStatus("Nothing to export","err"); return; }
   var lines=[]; var hd=[]; for(var c=0;c<GHEAD.length;c++) hd.push(cq(GHEAD[c])); lines.push(hd.join(","));
   for(var i=0;i<rows.length;i++){ var rw=rows[i]; var cells=[]; for(var c2=0;c2<GHEAD.length;c2++) cells.push(cq(c2<rw.length?rw[c2]:"")); lines.push(cells.join(",")); }
-  var dir=LASTOUTDIR||$("outDir").value;
+  var dir=LASTOUTDIR||trimStr($("outDir").value);
+  if(!dir){ setStatus("No output folder to export into — process an artifact or set the CSV output directory first.","err"); return; }
+  ensureDir(dir);
   var path=dir+"\\"+hostTag()+"filtered_export_"+nowStamp()+".csv";
   try{ writeUtf8(path, lines.join("\r\n")); setStatus("Exported "+nf(rows.length)+" rows → "+path,"ok"); appendLog("Exported: "+path); }
   catch(e){ setStatus("Export failed: "+e.message,"err"); }
@@ -1853,7 +1938,8 @@ function applyIocs(){
 /* ---------- wiring ---------- */
 function init(){
   try{ window.resizeTo(1320,900); }catch(e){}
-  $("appver").innerHTML="&middot; v"+APP_VERSION;
+  $("apppill").innerHTML="app v"+APP_VERSION;
+  $("apppill").title="AmcacheParser Wrapper v"+APP_VERSION+" — checking GitHub for a newer release…";
   try{ document.title="AmcacheParser Wrapper v"+APP_VERSION; }catch(e){}
   $("tblScroll").onscroll=applyFreeze;
   loadSettings();
@@ -1864,7 +1950,9 @@ function init(){
   $("pfPath").title="Path to a collected Amcache.hve. The live "+LIVE_HIVE+" is locked while Windows runs — snapshot it first (esentutl /y /vss, elevated).";
   // default output follows the target hostname: _Processed\<host>\AmcacheParser next to the .hta
   $("hostName").onkeyup=function(){ HOST_TOUCHED=true; syncOutDir(); };
+  $("hostName").onchange=function(){ HOST_TOUCHED=true; syncOutDir(); };   // also catch right-click paste (F6)
   $("outDir").onkeyup=function(){ OUT_TOUCHED=true; };
+  $("outDir").onchange=function(){ OUT_TOUCHED=true; };
   loadToolkitIoc();   // shared toolkit IOC.txt — merged before any CLI /auto run
 
   var zoom=0.9;
@@ -1922,8 +2010,16 @@ function init(){
   $("iocApply").onclick=applyIocs;
   $("iocLoad").onclick=function(){ $("iocPick").click(); };
   $("iocPick").onchange=function(){ if(this.value){
-    try{ $("iocBox").value=readUtf8(this.value); applyIocs(); }
-    catch(e){ setStatus("Could not read IOC file: "+e.message,"err"); } } };
+    try{
+      var incoming=String(readUtf8(this.value)).split(/[\r\n,;]+/), add=[], i;   // merge, don't clobber pasted terms (F8)
+      for(i=0;i<incoming.length;i++){ var s=trimStr(incoming[i]); if(s && s.charAt(0)!=="#") add.push(s); }
+      var cur=$("iocBox").value, curL={}, cp=String(cur).split(/[\r\n,;]+/);
+      for(i=0;i<cp.length;i++){ var c=trimStr(cp[i]).toLowerCase(); if(c) curL[c]=1; }
+      var fresh=[]; for(i=0;i<add.length;i++){ if(!curL[add[i].toLowerCase()]) fresh.push(add[i]); }
+      if(fresh.length) $("iocBox").value=(trimStr(cur)?(cur.replace(/\s+$/,"")+"\r\n"):"")+fresh.join("\r\n");
+      applyIocs();
+      setStatus(fresh.length?("Merged "+fresh.length+" IOC term(s) from the file"):"No new IOC terms in that file","ok");
+    }catch(e){ setStatus("Could not read IOC file: "+e.message,"err"); } } };
   $("vFiles").onclick=function(){ setView("files"); };
   $("vProgs").onclick=function(){ setView("progs"); };
   $("vDrv").onclick=function(){ setView("drv"); };
@@ -2009,9 +2105,10 @@ function applyCaseWindow(from,to){
   if(to){ if(/^\d{4}-\d{2}-\d{2}$/.test(to)){ CASE_TO=to; try{ $("dto").value=to; DTO=dayNum(to); }catch(e2){} } else appendLog("CLI: ignoring invalid /to value '"+to+"'"); }
   if(CASE_FROM||CASE_TO) appendLog("CLI: case window "+(CASE_FROM||"…")+" .. "+(CASE_TO||"…")+" — prefilled the date filter (filter only, never scored)");
 }
-function parseCli(){ var toks=tokenizeCmdTail(), cli={input:"",outDir:"",auto:false,from:"",to:""};
+function parseCli(){ var toks=tokenizeCmdTail(), cli={input:"",outDir:"",auto:false,from:"",to:"",force:false};
   for(var i=0;i<toks.length;i++){ var t=toks[i];
     if(/^[\/\-]{1,2}auto$/i.test(t)){ cli.auto=true; continue; }
+    if(/^[\/\-]{1,2}force$/i.test(t)){ cli.force=true; continue; }   // re-process even if prior output exists (item 8)
     var fm=t.match(/^[\/\-]{1,2}from[:=](\d{4}-\d{2}-\d{2})$/i); if(fm){ cli.from=fm[1]; continue; }
     var tm=t.match(/^[\/\-]{1,2}to[:=](\d{4}-\d{2}-\d{2})$/i); if(tm){ cli.to=tm[1]; continue; }
     if(/^[\/\-]/.test(t)) continue;
@@ -2019,6 +2116,7 @@ function parseCli(){ var toks=tokenizeCmdTail(), cli={input:"",outDir:"",auto:fa
   return cli; }
 function applyCli(cli){ if(!cli.input) return false;
   var fso=new ActiveXObject("Scripting.FileSystemObject");
+  FORCE_REPROCESS=!!cli.force; if(cli.auto) AUTO_RUN=true;   // item 8: /auto reuses existing output silently; /force overrides
   applyCaseWindow(cli.from, cli.to);   // case window (UTC): prefill the date filter BEFORE any /auto run — filter only, never scored
   if(/\.csv$/i.test(cli.input) && fso.FileExists(cli.input)){ appendLog("CLI: loading CSV "+cli.input); window.setTimeout(function(){ loadCsvFile(cli.input); },60); return true; }
   if(fso.FolderExists(cli.input) || fso.FileExists(cli.input)){ $("pfPath").value=cli.input; }
@@ -2088,11 +2186,14 @@ function checkSelfUpdate(){
     x.onreadystatechange=function(){ if(x.readyState!==4) return;
       try{ if(x.status!==200) return; var t=x.responseText+"";
         var m=t.match(/"tag_name"\s*:\s*"v?([0-9.]+)"/i); if(!m) return;
-        var latest=m[1]; if(!selfVerNewer(latest,APP_VERSION)) return;
+        var latest=m[1]; var ap=$("apppill");
+        if(!selfVerNewer(latest,APP_VERSION)){ if(ap){ ap.className="pill ok"; ap.title="Up to date — v"+APP_VERSION+" is the latest release."; } return; }
         var url="", re=/"browser_download_url"\s*:\s*"([^"]+\.hta)"/ig, mm;
         while((mm=re.exec(t))){ if(mm[1].toLowerCase().indexOf(SELF_HTA.toLowerCase())>=0){ url=mm[1]; break; } if(!url) url=mm[1]; }
         if(!url) url="https://github.com/"+SELF_REPO+"/releases/download/v"+latest+"/"+SELF_HTA;
         SELF_LATEST=latest; SELF_ASSET_URL=url;
+        if(ap){ ap.className="pill bad"; ap.innerHTML="app v"+APP_VERSION+" &middot; update v"+latest;
+          ap.title="A newer AmcacheParser Wrapper (v"+latest+") is on GitHub — click the Update button."; }
         var b=$("selfUpd"); if(b){ b.innerHTML="Update to v"+latest; b.className="btn primary";
           b.title="A newer "+SELF_HTA+" (v"+latest+") is on GitHub — click to download & replace this file"; }
       }catch(e){} };
@@ -2137,10 +2238,11 @@ window.onload=function(){ init(); try{ window.setTimeout(checkSelfUpdate,600); }
       <li>Or <b>Load existing CSV…</b> to view an AmcacheParser CSV you already have.</li>
     </ul>
     <h3>Command line</h3>
-    <p><code>mshta "AmcacheParser-Wrapper.hta" "&lt;inputOrCsv&gt;" ["&lt;outDir&gt;"] [/auto] [/from:yyyy-MM-dd] [/to:yyyy-MM-dd]</code></p>
+    <p><code>mshta "AmcacheParser-Wrapper.hta" "&lt;inputOrCsv&gt;" ["&lt;outDir&gt;"] [/auto] [/force] [/from:yyyy-MM-dd] [/to:yyyy-MM-dd]</code></p>
     <ul>
       <li><code>&lt;input&gt;</code> — a <code>.csv</code> (auto-loads) or an <code>Amcache.hve</code> file / collection directory (prefilled; processed with <code>/auto</code>).</li>
       <li><code>&lt;outDir&gt;</code> — CSV output directory (optional). &nbsp; <code>/auto</code> — process immediately.</li>
+      <li><code>/force</code> — re-run even if this hive was already processed into the output folder. Without it, a hive already recorded in the folder's <code>runinfo.json</code> is <b>re-opened, not re-parsed</b> (a <code>/auto</code> bulk launch loads it silently; an interactive Process asks first).</li>
       <li><code>/from:yyyy-MM-dd</code> <code>/to:yyyy-MM-dd</code> — case window (UTC, inclusive): prefills the date filter and is recorded in runinfo; never affects scoring.</li>
       <li><b>Target hostname</b> is required before processing — it names the output folder <code>_Processed\&lt;host&gt;\AmcacheParser</code> next to this app (family convention shared with the Artifact-Finder). It is guessed from <code>Collection-&lt;host&gt;-…</code> paths, a passed <code>_Processed\&lt;host&gt;\</code> outDir, or this machine's name for live paths — overwrite the guess if it's wrong.</li>
       <li><b>Shared IOC list</b>: an <code>IOC.txt</code> next to this app (one term per line, <code>#</code> comments) is auto-merged into the IOC box at launch — one list covers the whole toolkit. Terms you paste locally are kept.</li>
@@ -2150,7 +2252,8 @@ window.onload=function(){ init(); try{ window.setTimeout(checkSelfUpdate,600); }
     <ul>
       <li>Files, Programs and Drivers views, SHA-1 IOC matching, and a detail pane are built in. All timestamps UTC.</li>
       <li>Drag a column-header edge to resize it (widths persist per view); double-click the edge to reset that view.</li>
-      <li>A dirty hive parses with <code>--nl</code> automatically; first-seen times corroborate staging timelines.</li>
+      <li>If transaction-log replay fails on a dirty hive, the app tells you to tick <code>skip log replay</code> (<code>--nl</code>) and run again; first-seen times corroborate staging timelines.</li>
+      <li><b>Live snapshot</b> copies the hive and its two logs via three separate <code>esentutl /vss</code> shadows, so on a busy live box the logs can be momentarily out of step with the hive and replay may fail — if it does, tick <code>skip log replay</code> and re-run (you lose only the newest unflushed entries). Prefer a Velociraptor/KAPE collection when you can.</li>
     </ul>
     <p class="muted" style="font-size:11px">MIT © 2026 Ben Morris — click the link above for the full README &amp; releases.</p>
   </div>
