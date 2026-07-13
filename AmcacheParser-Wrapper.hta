@@ -254,7 +254,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.9.0";
+var APP_VERSION = "1.9.1";
 var KNOWN_LATEST_AMCP = "2026.5.0";                                            // EZ site CalVer as of 2026-07-11 (schemesComparable() guards the SemVer-banner mismatch)
 var AMCP_ZIP_URL = "https://download.ericzimmermanstools.com/net9/AmcacheParser.zip";  // official EZ mirror (.NET 9 build)
 var AMCP_PAGE = "https://ericzimmerman.github.io/";                            // for live latest-version lookup
@@ -579,11 +579,11 @@ function runPsScript(lines){
   }
   return r.log;
 }
-function downloadLatest(){
+function downloadLatest(silent, done){   // silent: skip the confirms (unattended /auto); done(ok): fired after install
   var target=htaFolder()||EXE_DIR;   // always install next to the .hta (self-contained)
-  if(!target){ setStatus("Cannot determine the app folder to install into","err"); return; }
-  if(!WEB_OK && !confirm("The Zimmerman Tools site did not respond earlier (no internet?).\n\nTry downloading AmcacheParser from\n"+AMCP_ZIP_URL+"\ninto\n"+target+" anyway?")) return;
-  if(WEB_OK && !confirm("Download latest AmcacheParser (v"+(LATEST_VER||KNOWN_LATEST_AMCP)+") from:\n"+AMCP_ZIP_URL+"\n\nInstall next to the app into:\n"+target+"\n\nProceed?")) return;
+  if(!target){ setStatus("Cannot determine the app folder to install into","err"); if(done) done(false); return; }
+  if(!silent && !WEB_OK && !confirm("The Zimmerman Tools site did not respond earlier (no internet?).\n\nTry downloading AmcacheParser from\n"+AMCP_ZIP_URL+"\ninto\n"+target+" anyway?")) return;
+  if(!silent && WEB_OK && !confirm("Download latest AmcacheParser (v"+(LATEST_VER||KNOWN_LATEST_AMCP)+") from:\n"+AMCP_ZIP_URL+"\n\nInstall next to the app into:\n"+target+"\n\nProceed?")) return;
   setStatus("Downloading & installing AmcacheParser… (give it a moment)","muted");
   var tq=String(target).replace(/'/g,"''");
   try{
@@ -601,9 +601,23 @@ function downloadLatest(){
       "Remove-Item $z,$x -Recurse -Force -ErrorAction SilentlyContinue",
       "Write-Output 'INSTALL_OK'"]);
     appendLog("--- AmcacheParser download / install ---\n"+log);
-    if((log+"").indexOf("INSTALL_OK")>=0){ setStatus("AmcacheParser installed to "+target,"ok"); evaluateTooling(false); }
-    else setStatus("Download/install failed — see log","err");
-  }catch(e){ setStatus("Download failed: "+e.message,"err"); }
+    if((log+"").indexOf("INSTALL_OK")>=0){ setStatus("AmcacheParser installed to "+target,"ok"); evaluateTooling(false); if(done) done(true); }
+    else { setStatus("Download/install failed — see log","err"); if(done) done(false); }
+  }catch(e){ setStatus("Download failed: "+e.message,"err"); if(done) done(false); }
+}
+/* /auto launch: if the tool exe is missing, fetch it first and run in the install callback.
+   The Finder's Process / Process-all fires wrappers unattended, so a missing exe must self-resolve
+   rather than just erroring. Exe already present, or genuinely offline, falls straight through to the
+   normal run (processPf emits the existing clear "not found" message when offline). */
+function autoProcess(){
+  if(EXE && fileExists(EXE)){ processPf(); return; }
+  if(WEB_OK){
+    setStatus("AmcacheParser.exe not present - downloading it before this auto run…","muted");
+    appendLog("/auto: AmcacheParser.exe missing - fetching it before processing");
+    downloadLatest(true, function(ok){ if(ok) processPf(); });
+    return;
+  }
+  processPf();   // offline: let processPf surface the existing "not found" error
 }
 
 /* ---------- actions ---------- */
@@ -2161,7 +2175,7 @@ function applyCli(cli){ if(!cli.input) return false;
   else { setStatus("CLI input not found: "+cli.input,"err"); appendLog("CLI input not found: "+cli.input); return false; }
   if(cli.outDir){ $("outDir").value=cli.outDir; OUT_TOUCHED=true; hostGuessFrom(cli.outDir); }
   else hostGuessFrom(cli.input);
-  if(cli.auto){ appendLog("CLI: /auto — processing "+cli.input); window.setTimeout(function(){ processPf(); },200); }
+  if(cli.auto){ appendLog("CLI: /auto — processing "+cli.input); window.setTimeout(function(){ autoProcess(); },200); }
   else setStatus("CLI: input prefilled — click 'Process → analyze' to run.","muted");
   return true; }
 
