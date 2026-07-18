@@ -119,6 +119,7 @@
   .modal code{background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:2px 6px;font-family:Consolas,monospace;font-size:12px}
   .modal .x{float:right;cursor:pointer;color:#8b949e;font-size:22px;line-height:1}.modal .x:hover{color:#e6edf3}
   .modal .gh{font-family:Consolas,monospace;font-size:12px}
+  .maxwarn{display:inline-block;color:#e3b341;font-weight:600;cursor:help;border:1px solid #8a7a2a;background:#2a2410;border-radius:10px;padding:1px 8px;font-size:11px;margin-left:6px;vertical-align:middle}
 </style>
 </head>
 <body>
@@ -254,7 +255,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.9.1";
+var APP_VERSION = "1.9.2";
 var KNOWN_LATEST_AMCP = "2026.5.0";                                            // EZ site CalVer as of 2026-07-11 (schemesComparable() guards the SemVer-banner mismatch)
 var AMCP_ZIP_URL = "https://download.ericzimmermanstools.com/net9/AmcacheParser.zip";  // official EZ mirror (.NET 9 build)
 var AMCP_PAGE = "https://ericzimmerman.github.io/";                            // for live latest-version lookup
@@ -266,6 +267,17 @@ var LATEST_VER = "";
 var WEB_OK = false;                  // could we reach the Zimmerman Tools site to check latest?
 var QUERY = "";
 var MAXROWS = 6000;
+/* Row-limit disclosure (family-wide wave): a capped table that merely says "(showing N)" reads
+   as complete to anyone who does not know the cap exists. One consistent amber chip wherever
+   the render cap bites, with the remedy in the tooltip. The cap keeps mshta responsive; the
+   DATA is intact - exports always write the FULL filtered set. */
+function maxRowsWarn(shown, total, extra){
+  if(!(total>shown)) return "";
+  return ' <span class="maxwarn" title="'+esc("Drawing the first "+nf(shown)+" of "+nf(total)+" matching rows - the render cap keeps the app responsive; it does NOT mean the rest were discarded. Narrow the view (search box, filters, case date window) to bring what you need inside the cap, or use Export view -> CSV: exports always write the FULL filtered set."+(extra?(" "+extra):""))+'">&#9888; Warning: Maximum Rows Exceeded</span>';
+}
+function copyCapNote(arr){ var total=(arr||[]).length;
+  return total>500 ? (" - first 500 of "+nf(total)+" (clipboard cap); Export view -> CSV writes the full set") : "";
+}
 var LASTOUTDIR = "";
 var qTimer = null;
 var MODE = "pf";                     // "pf" = rich Amcache analysis, "generic" = raw table
@@ -1620,7 +1632,7 @@ function renderTable(cols, rows, sort, label, rerender, tie){
   window.__viewRows=rows;
 }
 function finishTable(total, label, shown){
-  $("count").innerHTML=nf(total)+" "+label+(shown<total?(" (showing "+nf(shown)+")"):"");
+  $("count").innerHTML=nf(total)+" "+label+(shown<total?(" (showing "+nf(shown)+")"):"")+maxRowsWarn(shown,total);
   applyFreeze();
   setupColResize();
 }
@@ -1947,7 +1959,7 @@ function copyNotes(){
     var grows=(window.__viewRows||[]).slice(0,500); if(!GHEAD||!grows.length){ setStatus("Nothing to copy","err"); return; }
     var gout=[GHEAD.join("\t")];
     for(var g=0;g<grows.length;g++) gout.push(grows[g].join("\t"));
-    try{ window.clipboardData.setData("Text", gout.join("\r\n")); setStatus("Copied "+grows.length+" rows (TSV)","ok"); }
+    try{ window.clipboardData.setData("Text", gout.join("\r\n")); setStatus("Copied "+grows.length+" rows (TSV)"+copyCapNote(window.__viewRows),"ok"); }
     catch(eg){ setStatus("Copy failed: "+eg.message,"err"); }
     return;
   }
@@ -1969,7 +1981,7 @@ function copyNotes(){
         +(r.reasons.length?(" | "+r.reasons.join("; ")):"")); }
   }
   try{ window.clipboardData.setData("Text", out.join("\r\n"));
-    setStatus("Copied "+out.length+" rows to clipboard","ok"); }
+    setStatus("Copied "+out.length+" rows to clipboard"+copyCapNote(window.__viewRows),"ok"); }
   catch(e){ setStatus("Copy failed: "+e.message,"err"); }
 }
 
